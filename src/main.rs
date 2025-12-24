@@ -1,8 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![allow(clippy::type_complexity, clippy::result_large_err)]
 #![deny(unused)]
-//! .
-//! .
+//! Simulate Prop AMMs
 use std::{
     collections::HashSet,
     fmt::{Debug, Display},
@@ -26,7 +25,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use spl_associated_token_account::get_associated_token_address;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use tracing_subscriber::{EnvFilter, fmt::time::UtcTime};
 
 pub mod consts {
@@ -78,6 +77,7 @@ pub mod consts {
         pub const ACCOUNTS: [Pubkey; 5] = [PAIR, VAULT_INFO_BASE, VAULT_BASE, VAULT_INFO_QUOTE, VAULT_QUOTE];
     }
 
+    // Obric's USDT-USDC market (the only one currently supported)
     pub mod obric_v2 {
         use super::*;
 
@@ -149,24 +149,28 @@ pub struct CommonArgs {
     #[arg(long, env = "AMOUNT_IN", default_value_t = 1, help = "The amount of tokens to trade")]
     pub amount_in: u64,
 
-    #[arg(long, env = "DIRECTION", default_value = "wsol-to-usdc", help = "Swap direction: wsol-to-usdc or usdc-to-wsol")]
-    pub direction: Direction,
+    #[arg(long, env = "SRC_TOKEN", default_value = "wsol", help = "Source token: wsol, usdc, or usdt")]
+    pub src_token: Token,
+
+    #[arg(long, env = "DST_TOKEN", default_value = "usdc", help = "Destination token: wsol, usdc, or usdt")]
+    pub dst_token: Token,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
     #[command(
-        about = "Run a single swap instruction across one or more Prop AMMs with specified weights",
+        about = "Run a single swap instruction across one or more Prop AMMs with specified weights.",
         after_help = "Examples:
-  pmm-sim single --dexes humidifi --weights 100
-  pmm-sim single --dexes humidifi,obric-v2 --weights 50,50
-  pmm-sim single --amount-in 1000000 --dexes zerofi,solfi-v2 --weights 60,40"
+  pmm-sim single --dexes=humidifi --weights=100 --amount-in=100 --src-token=WSOL --dst-token=USDC
+  pmm-sim single --dexes=humidifi,solfi-v2 --weights=50,50 --amount-in=150000 --src-token=USDC --dst-token=WSOL
+  pmm-sim single --amount-in=10000 --dexes=solfi-v2 --weights=100
+  pmm-sim single --amount-in=10000 --dexes=obric-v2 --weights=100 --src-token=USDC --dst-token=USDT"
     )]
     Single {
         #[command(flatten)]
         common: CommonArgs,
 
-        #[arg(long, value_delimiter = ',', default_value = "humidifi,obric-v2", help = "Comma-separated list of Prop AMMs")]
+        #[arg(long, value_delimiter = ',', default_value = "humidifi,solfi-v2", help = "Comma-separated list of Prop AMMs")]
         dexes: Vec<Dex>,
 
         #[arg(long, value_delimiter = ',', default_value = "50,50", help = "Comma-separated weights")]
@@ -177,13 +181,13 @@ pub enum Command {
         about = "Execute multiple swap instructions across nested Prop AMM routes. Each inner list represents a single transaction step.",
         after_help = "Examples:
       # Single step with one DEX
-      pmm-sim multi --dexes '[[humidifi]]' --weights '[[100]]'
+      pmm-sim multi --dexes='[[humidifi]]' --weights='[[100]]'
 
       # Two sequential swaps: (Humidifi + Obric) followed by Zerofi
-      pmm-sim multi --dexes '[[humidifi,obric-v2],[zerofi]]' --weights '[[50,50],[100]]'
+      pmm-sim multi --dexes='[[humidifi,zerofi],[solfi-v2]]' --weights='[[50,50],[100]]'
 
       # Complex three-step route
-      pmm-sim multi --amount-in 10 --dexes '[[humidifi],[obric-v2,solfi-v2],[zerofi]]' --weights '[[100],[60,40],[100]]'"
+      pmm-sim multi --amount-in 10 --dexes='[[humidifi],[solfi-v2],[zerofi]]' --weights='[[100],[60,40],[100]]'"
     )]
     Multi {
         #[command(flatten)]
@@ -197,11 +201,11 @@ pub enum Command {
     },
 
     #[command(
-        about = "Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage)",
+        about = "Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).",
         after_help = "Examples:
-  pmm-sim fetch-accounts --dexes humidifi
-  pmm-sim fetch-accounts --dexes humidifi,obric-v2,zerofi,solfi-v2pmm-sim \
-                      fetch-accounts --dexes humidifi --http-url https://my-rpc.com"
+  pmm-sim fetch-accounts --dexes=humidifi
+  pmm-sim fetch-accounts --dexes=humidifi,obric-v2,zerofi,solfi-v2pmm-sim \
+                      fetch-accounts --dexes=humidifi --http-url=https://my-rpc.com"
     )]
     FetchAccounts {
         #[arg(long, env = "HTTP_URL", default_value = "https://api.mainnet.solana.com")]
@@ -221,28 +225,49 @@ pub enum Command {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    WsolToUsdc,
-    UsdcToWsol,
+pub enum Token {
+    WSOL,
+    USDC,
+    USDT,
 }
 
-impl FromStr for Direction {
+impl FromStr for Token {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "wsol-to-usdc" | "wsoltousdc" | "wsol>usdc" | "wsol" => Ok(Direction::WsolToUsdc),
-            "usdc-to-wsol" | "usdctowsol" | "usdc>wsol" | "usdc" => Ok(Direction::UsdcToWsol),
-            _ => Err(format!("invalid direction '{}'. valid options: wsol-to-usdc, usdc-to-wsol", s)),
+            "wsol" | "sol" => Ok(Token::WSOL),
+            "usdc" => Ok(Token::USDC),
+            "usdt" => Ok(Token::USDT),
+            _ => Err(format!("invalid token '{}'. valid options: wsol, usdc, usdt", s)),
         }
     }
 }
 
-impl std::fmt::Display for Direction {
+impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Direction::WsolToUsdc => f.write_str("wsol-to-usdc"),
-            Direction::UsdcToWsol => f.write_str("usdc-to-wsol"),
+            Token::WSOL => f.write_str("WSOL"),
+            Token::USDT => f.write_str("USDT"),
+            Token::USDC => f.write_str("USDC"),
+        }
+    }
+}
+
+impl Token {
+    fn get_addr(&self) -> Pubkey {
+        match *self {
+            Token::WSOL => consts::WSOL,
+            Token::USDC => consts::USDC,
+            Token::USDT => consts::USDT,
+        }
+    }
+
+    fn get_decimals(&self) -> u8 {
+        match *self {
+            Token::WSOL => consts::WSOL_DECIMALS,
+            Token::USDC => consts::USDC_DECIMALS,
+            Token::USDT => consts::USDT_DECIMALS,
         }
     }
 }
@@ -270,7 +295,7 @@ impl<'a, P: Into<String> + Display + Clone + std::fmt::Debug> Debug for Environm
 impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
     fn new(programs_path: P, accounts_path: P, mints: Option<&[(Pubkey, u8)]>) -> eyre::Result<Environment<'_, P>> {
         let mut budget = ComputeBudget::new_with_defaults(false);
-        budget.compute_unit_limit = 2_000_000;
+        budget.compute_unit_limit = 20_000_000;
 
         let wallet = Keypair::new();
         let mut svm = LiteSVM::new().with_default_programs().with_sysvars().with_sigverify(true).with_compute_budget(budget);
@@ -365,9 +390,7 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             if all_slots.iter().any(|&s| s != first_slot) {
                 let min_slot = all_slots.iter().min().copied().unwrap();
                 let max_slot = all_slots.iter().max().copied().unwrap();
-                tracing::warn!(
-                    "slot mismatch across dexes: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}"
-                );
+                warn!("slot mismatch across dexes: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
             }
             self.svm.warp_to_slot(first_slot);
             info!("warped to slot {first_slot}");
@@ -425,13 +448,12 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             if slots.iter().any(|&s| s != first_slot) {
                 let min_slot = slots.iter().min().copied().unwrap();
                 let max_slot = slots.iter().max().copied().unwrap();
-                tracing::warn!(
-                    "slot mismatch for {dex}: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}"
-                );
+                warn!("slot mismatch for {dex}: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
             }
             Some(first_slot)
         };
 
+        debug!(?accounts, ?slot);
         Ok((accounts, slot))
     }
 
@@ -633,24 +655,6 @@ impl Misc {
         }
     }
 
-    fn get_decimals(mint: &Pubkey) -> u8 {
-        match *mint {
-            consts::WSOL => consts::WSOL_DECIMALS,
-            consts::USDC => consts::USDC_DECIMALS,
-            consts::USDT => consts::USDT_DECIMALS,
-            _ => 9,
-        }
-    }
-
-    fn get_mint_naming(mint: &Pubkey) -> &'static str {
-        match *mint {
-            consts::WSOL => "WSOL",
-            consts::USDC => "USDC",
-            consts::USDT => "USDT",
-            _ => "UNKNOWN",
-        }
-    }
-
     fn fetch_dex_accounts(dexes: &[Dex], client: &RpcClient) -> eyre::Result<(u64, Vec<(Dex, Vec<(Pubkey, Account)>)>)> {
         let slot = client.get_slot()?;
         let unique_dexes: HashSet<_> = dexes.iter().collect();
@@ -658,7 +662,7 @@ impl Misc {
 
         for dex in unique_dexes {
             let Some(accounts) = Misc::get_dex_accounts(dex) else {
-                tracing::warn!("skipping unsupported dex: {dex}");
+                warn!("skipping unsupported dex: {dex}");
                 continue;
             };
 
@@ -670,7 +674,7 @@ impl Misc {
                 if let Some(acc) = account {
                     dex_accounts.push((*pubkey, acc));
                 } else {
-                    tracing::warn!("account {pubkey} not found for {dex}");
+                    warn!("account {pubkey} not found for {dex}");
                 }
             }
 
@@ -736,32 +740,30 @@ impl Run {
         let rpc_client = RpcClient::new(common.http_url.expose_secret().to_string());
         let flat_dexes: Vec<Dex> = dexes.iter().flatten().copied().collect();
 
-        let mints = vec![(consts::WSOL, consts::WSOL_DECIMALS), (consts::USDC, consts::USDC_DECIMALS)];
+        let (src_mint, src_dec, src_name) = (common.src_token.get_addr(), common.src_token.get_decimals(), common.src_token.to_string());
+        let (dst_mint, dst_dec, dst_name) = (common.dst_token.get_addr(), common.dst_token.get_decimals(), common.dst_token.to_string());
+        let mints = vec![(src_mint, src_dec), (dst_mint, dst_dec)];
+
         let mut env = Environment::new(consts::PROGRAMS_DIR, consts::ACCOUNTS_DIR, Some(&mints))?;
         env.load_programs(&flat_dexes)?;
         env.load_accounts(&flat_dexes, common.jit_accounts, Some(&rpc_client))?;
 
-        let (src_mint, dst_mint) = match common.direction {
-            Direction::WsolToUsdc => (consts::WSOL, consts::USDC),
-            Direction::UsdcToWsol => (consts::USDC, consts::WSOL),
-        };
-
         // - mint only the source token's desired amount (i.e the amount we're going to swap)
         // - airdrop some SOL to cover fees
-        env.setup_wallet(&src_mint, common.amount_in * 10u64.pow(Misc::get_decimals(&src_mint) as u32), 10_000_000_000)?;
+        env.setup_wallet(&src_mint, common.amount_in * 10u64.pow(src_dec as u32), 10_000_000_000)?;
         info!(?env);
 
-        let (src_ata, src_name) = (env.wallet_ata(&src_mint), Misc::get_mint_naming(&src_mint));
-        let (dst_ata, dst_name) = (env.wallet_ata(&dst_mint), Misc::get_mint_naming(&dst_mint));
-
-        let src_before = env.token_balance(&src_mint) as f64 / 10_f64.powi(Misc::get_decimals(&src_mint) as i32);
-        let dst_before = env.token_balance(&dst_mint) as f64 / 10_f64.powi(Misc::get_decimals(&dst_mint) as i32);
-        info!("before: {} ({}) = {} | {} ({}) = {}", src_name, src_mint, src_before, dst_name, dst_mint, dst_before);
+        let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
+        let (src_before, dst_before) = (
+            env.token_balance(&src_mint) as f64 / 10_f64.powi(src_dec as i32),
+            env.token_balance(&dst_mint) as f64 / 10_f64.powi(dst_dec as i32),
+        );
+        info!("before: {} = {} | {} = {}", src_name, src_before, dst_name, dst_before);
 
         let routes: Vec<Route> =
             dexes.iter().zip(weights.iter()).map(|(dex, weight)| Route { dexes: dex.clone(), weights: weight.clone() }).collect();
 
-        let norm_amount_in = common.amount_in * 10u64.pow(Misc::get_decimals(&src_mint) as u32);
+        let norm_amount_in = common.amount_in * 10u64.pow(src_dec as u32);
         info!("swapping {} {} via routes: {:?}", common.amount_in, src_name, routes);
 
         let mut swap_builder = SwapBuilder::new();
@@ -795,13 +797,14 @@ impl Run {
         debug!("router program id: {}", swap_ix.program_id);
 
         let tx = Transaction::new_signed_with_payer(&[swap_ix], Some(&env.wallet_pubkey()), &[&env.wallet], env.latest_blockhash());
-        env.send_transaction(tx).expect("failed to exec tx");
+        let res = env.send_transaction(tx).expect("failed to exec tx");
 
         let (src_after, dst_after) = (
-            env.token_balance(&src_mint) as f64 / 10_f64.powi(Misc::get_decimals(&src_mint) as i32),
-            env.token_balance(&dst_mint) as f64 / 10_f64.powi(Misc::get_decimals(&dst_mint) as i32),
+            env.token_balance(&src_mint) as f64 / 10_f64.powi(src_dec as i32),
+            env.token_balance(&dst_mint) as f64 / 10_f64.powi(dst_dec as i32),
         );
-        info!("after: {} = {:.6} | {} = {:.6}", src_name, src_after, dst_name, dst_after);
+        info!("|SWAP EXECUTED| compute units consumed: {}", res.compute_units_consumed);
+        info!("after: {} = {:.6} | {} = {:.6} | ", src_name, src_after, dst_name, dst_after);
         info!("diff: {} spent = {:.6} | {} received = {:.6}", src_name, src_before - src_after, dst_name, dst_after - dst_before);
 
         Ok(())
