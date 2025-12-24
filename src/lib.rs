@@ -110,11 +110,10 @@ define_dex_configs! {
         x_price_feed,
         y_price_feed,
     },
-    //Tessera => TesseraCfg : tessera ("tessera") {
-    //    pool,
-    //    pool_base_vault,
-    //    pool_quote_vault,
-    //    pool_authority,
-    //    oracle,
-    //},
+    Tessera => TesseraCfg : tessera ("tessera") {
+        global_state,
+        market,
+        base_token_account,
+        quote_token_account,
+    },
 }

@@ -631,6 +631,30 @@ impl<'a> ConstructSwap<'a> {
             panic!("ObricV2 config is missing, cannot attach accounts.");
         }
     }
+
+    pub fn attach_tessera_accs(&mut self, src_mint: &Pubkey, dst_mint: &Pubkey) {
+        if let Some(cfg) = &self.cfg.tessera {
+            self.builder
+                .add_remaining_account(AccountMeta::new_readonly(
+                    Pubkey::new_from_array(magnus_shared::pmm_tessera::id().to_bytes()),
+                    false,
+                ))
+                .add_remaining_account(AccountMeta::new(self.payer, true))
+                .add_remaining_account(AccountMeta::new(self.sta, false))
+                .add_remaining_account(AccountMeta::new(self.dta, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.global_state, false))
+                .add_remaining_account(AccountMeta::new(cfg.market, false))
+                .add_remaining_account(AccountMeta::new(cfg.base_token_account, false))
+                .add_remaining_account(AccountMeta::new(cfg.quote_token_account, false))
+                .add_remaining_account(AccountMeta::new_readonly(*src_mint, false))
+                .add_remaining_account(AccountMeta::new_readonly(*dst_mint, false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+        } else {
+            panic!("Tessera config is missing, cannot attach accounts.");
+        }
+    }
 }
 
 struct Misc;
@@ -823,7 +847,10 @@ impl Run {
                 Dex::SolfiV2 => construct.attach_solfiv2_accs(),
                 Dex::Zerofi => construct.attach_zerofi_accs(),
                 Dex::ObricV2 => construct.attach_obric_v2_accs(),
-                _ => {}
+                Dex::Tessera => construct.attach_tessera_accs(&src_mint, &dst_mint),
+                _ => {
+                    unimplemented!()
+                }
             };
         }
 

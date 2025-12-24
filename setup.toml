@@ -27,3 +27,10 @@ reserve_y = "AAamGhyPfpQJWfZHTq944NM1cFvoVLDrQxt7HGjeRQUS"
 ref_oracle = "J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw"
 x_price_feed = "J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw"
 y_price_feed = "J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw"
+
+# https://solscan.io/account/FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n
+[tessera]
+market = "FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n"
+base_token_account = "5pVN5XZB8cYBjNLFrsBCPWkCQBan5K5Mq2dWGzwPgGJV"
+quote_token_account = "9t4P5wMwfFkyn92Z7hf463qYKEZf8ERVZsGBEPNp8uJx"
+global_state = "8ekCy2jHHUbW2yeNGFWYJT9Hm9FW7SvZcZK66dSZCDiF"
