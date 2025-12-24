@@ -5,7 +5,7 @@
 //! .
 use std::{
     collections::HashSet,
-    fmt::Display,
+    fmt::{Debug, Display},
     fs::{self, File},
     io::Write,
     path::Path,
@@ -22,8 +22,8 @@ use secrecy::{ExposeSecret, SecretString};
 use solana_client::rpc_client::RpcClient;
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_sdk::{
-    account::Account, message::AccountMeta, program_pack::Pack, pubkey::Pubkey, rent::Rent, signature::Keypair,
-    signer::Signer, sysvar, transaction::Transaction,
+    account::Account, message::AccountMeta, program_pack::Pack, pubkey::Pubkey, rent::Rent, signature::Keypair, signer::Signer, sysvar,
+    transaction::Transaction,
 };
 use spl_associated_token_account::get_associated_token_address;
 use tracing::{debug, info};
@@ -90,16 +90,8 @@ pub mod consts {
         pub const X_PRICE_FEED: Pubkey = pubkey!("J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw");
         pub const Y_PRICE_FEED: Pubkey = pubkey!("J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw");
 
-        pub const ACCOUNTS: [Pubkey; 8] = [
-            TRADING_PAIR,
-            SECOND_REF_ORACLE,
-            THIRD_REF_ORACLE,
-            RESERVE_X,
-            RESERVE_Y,
-            REF_ORACLE,
-            X_PRICE_FEED,
-            Y_PRICE_FEED,
-        ];
+        pub const ACCOUNTS: [Pubkey; 8] =
+            [TRADING_PAIR, SECOND_REF_ORACLE, THIRD_REF_ORACLE, RESERVE_X, RESERVE_Y, REF_ORACLE, X_PRICE_FEED, Y_PRICE_FEED];
     }
 }
 
@@ -113,10 +105,7 @@ pub struct CliArgs {
 impl CliArgs {
     fn parse_nested_dexes(s: &str) -> Result<Vec<Vec<Dex>>, String> {
         if let Ok(parsed) = serde_json::from_str::<Vec<Vec<String>>>(s) {
-            return parsed
-                .into_iter()
-                .map(|group| group.into_iter().map(|s| s.parse::<Dex>()).collect::<Result<Vec<Dex>, _>>())
-                .collect();
+            return parsed.into_iter().map(|group| group.into_iter().map(|s| s.parse::<Dex>()).collect::<Result<Vec<Dex>, _>>()).collect();
         }
 
         let s = s.trim();
@@ -160,12 +149,7 @@ pub struct CommonArgs {
     #[arg(long, env = "AMOUNT_IN", default_value_t = 1, help = "The amount of tokens to trade")]
     pub amount_in: u64,
 
-    #[arg(
-        long,
-        env = "DIRECTION",
-        default_value = "wsol-to-usdc",
-        help = "Swap direction: wsol-to-usdc or usdc-to-wsol"
-    )]
+    #[arg(long, env = "DIRECTION", default_value = "wsol-to-usdc", help = "Swap direction: wsol-to-usdc or usdc-to-wsol")]
     pub direction: Direction,
 }
 
@@ -182,12 +166,7 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
 
-        #[arg(
-            long,
-            value_delimiter = ',',
-            default_value = "humidifi,obric-v2",
-            help = "Comma-separated list of Prop AMMs"
-        )]
+        #[arg(long, value_delimiter = ',', default_value = "humidifi,obric-v2", help = "Comma-separated list of Prop AMMs")]
         dexes: Vec<Dex>,
 
         #[arg(long, value_delimiter = ',', default_value = "50,50", help = "Comma-separated weights")]
@@ -195,8 +174,7 @@ pub enum Command {
     },
 
     #[command(
-        about = "Execute multiple swap instructions across nested Prop AMM routes. Each inner list represents a \
-                 single transaction step.",
+        about = "Execute multiple swap instructions across nested Prop AMM routes. Each inner list represents a single transaction step.",
         after_help = "Examples:
       # Single step with one DEX
       pmm-sim multi --dexes '[[humidifi]]' --weights '[[100]]'
@@ -205,8 +183,7 @@ pub enum Command {
       pmm-sim multi --dexes '[[humidifi,obric-v2],[zerofi]]' --weights '[[50,50],[100]]'
 
       # Complex three-step route
-      pmm-sim multi --amount-in 10 --dexes '[[humidifi],[obric-v2,solfi-v2],[zerofi]]' --weights \
-                      '[[100],[60,40],[100]]'"
+      pmm-sim multi --amount-in 10 --dexes '[[humidifi],[obric-v2,solfi-v2],[zerofi]]' --weights '[[100],[60,40],[100]]'"
     )]
     Multi {
         #[command(flatten)]
@@ -215,11 +192,7 @@ pub enum Command {
         #[arg(long, default_value = "[[humidifi]]", help = "JSON nested routes, e.g. '[[dex1,dex2],[dex3]]'")]
         dexes: String,
 
-        #[arg(
-            long,
-            default_value = "[[100]]",
-            help = "JSON nested weights matching the dexes structure, e.g. '[[50,50],[100]]'"
-        )]
+        #[arg(long, default_value = "[[100]]", help = "JSON nested weights matching the dexes structure, e.g. '[[50,50],[100]]'")]
         weights: String,
     },
 
@@ -274,7 +247,7 @@ impl std::fmt::Display for Direction {
     }
 }
 
-struct Environment<'a, P: Into<String> + Display + Clone> {
+struct Environment<'a, P: Into<String> + Display + Clone + Debug> {
     svm: LiteSVM,
     wallet: Keypair,
     mints: Option<&'a [(Pubkey, u8)]>,
@@ -283,14 +256,24 @@ struct Environment<'a, P: Into<String> + Display + Clone> {
     accounts_path: P,
 }
 
-impl<'a, P: Into<String> + Display + Clone> Environment<'a, P> {
+impl<'a, P: Into<String> + Display + Clone + std::fmt::Debug> Debug for Environment<'a, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Environment")
+            .field("wallet_pubkey", &self.wallet.pubkey())
+            .field("programs_path", &self.programs_path)
+            .field("accounts_path", &self.accounts_path)
+            .field("mints", &self.mints)
+            .finish()
+    }
+}
+
+impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
     fn new(programs_path: P, accounts_path: P, mints: Option<&[(Pubkey, u8)]>) -> eyre::Result<Environment<'_, P>> {
         let mut budget = ComputeBudget::new_with_defaults(false);
         budget.compute_unit_limit = 2_000_000;
 
         let wallet = Keypair::new();
-        let mut svm =
-            LiteSVM::new().with_default_programs().with_sysvars().with_sigverify(true).with_compute_budget(budget);
+        let mut svm = LiteSVM::new().with_default_programs().with_sysvars().with_sigverify(true).with_compute_budget(budget);
 
         if let Some(mints) = mints {
             for (mint, mint_decimals) in mints {
@@ -318,24 +301,6 @@ impl<'a, P: Into<String> + Display + Clone> Environment<'a, P> {
         Ok(())
     }
 
-    fn get_decimals(&self, mint: &Pubkey) -> u8 {
-        match *mint {
-            consts::WSOL => consts::WSOL_DECIMALS,
-            consts::USDC => consts::USDC_DECIMALS,
-            consts::USDT => consts::USDT_DECIMALS,
-            _ => 9,
-        }
-    }
-
-    fn get_mint_naming(&self, mint: &Pubkey) -> &'static str {
-        match *mint {
-            consts::WSOL => "WSOL",
-            consts::USDC => "USDC",
-            consts::USDT => "USDT",
-            _ => "UNKNOWN",
-        }
-    }
-
     fn wallet_pubkey(&self) -> Pubkey {
         self.wallet.pubkey()
     }
@@ -346,19 +311,13 @@ impl<'a, P: Into<String> + Display + Clone> Environment<'a, P> {
 
     fn load_programs(&mut self, dexes: &[Dex]) -> eyre::Result<()> {
         // mandatory load
-        self.svm.add_program_from_file(
-            magnus_router_client::programs::ROUTER_ID,
-            format!("{}/magnus-router.so", self.programs_path),
-        )?;
+        self.svm.add_program_from_file(magnus_router_client::programs::ROUTER_ID, format!("{}/magnus-router.so", self.programs_path))?;
 
         let unique_dexes: HashSet<_> = dexes.iter().collect();
         for dex in unique_dexes {
             let program_id = dex.program_id();
 
-            self.svm.add_program_from_file(
-                Pubkey::new_from_array(program_id.to_bytes()),
-                format!("{}/{}.so", self.programs_path, dex),
-            )?;
+            self.svm.add_program_from_file(Pubkey::new_from_array(program_id.to_bytes()), format!("{}/{}.so", self.programs_path, dex))?;
 
             info!("loaded program for {dex}");
         }
@@ -407,8 +366,7 @@ impl<'a, P: Into<String> + Display + Clone> Environment<'a, P> {
                 let min_slot = all_slots.iter().min().copied().unwrap();
                 let max_slot = all_slots.iter().max().copied().unwrap();
                 tracing::warn!(
-                    "slot mismatch across dexes: accounts fetched at different slots ({min_slot} - {max_slot}), using \
-                     {first_slot}"
+                    "slot mismatch across dexes: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}"
                 );
             }
             self.svm.warp_to_slot(first_slot);
@@ -444,18 +402,13 @@ impl<'a, P: Into<String> + Display + Clone> Environment<'a, P> {
             return Ok((vec![], None));
         }
 
-        let mut accounts = vec![];
-        let mut slots: Vec<u64> = vec![];
-
+        let (mut accounts, mut slots) = (vec![], vec![]);
         for entry in fs::read_dir(data_dir)? {
             let entry = entry?;
             let path = entry.path();
 
             if path.is_file()
-                && path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"))
+                && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"))
             {
                 let (pubkey, account, slot) = Self::read_account_from_file(&path)?;
                 accounts.push((pubkey, account));
@@ -473,8 +426,7 @@ impl<'a, P: Into<String> + Display + Clone> Environment<'a, P> {
                 let min_slot = slots.iter().min().copied().unwrap();
                 let max_slot = slots.iter().max().copied().unwrap();
                 tracing::warn!(
-                    "slot mismatch for {dex}: accounts fetched at different slots ({min_slot} - {max_slot}), using \
-                     {first_slot}"
+                    "slot mismatch for {dex}: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}"
                 );
             }
             Some(first_slot)
@@ -494,7 +446,7 @@ impl<'a, P: Into<String> + Display + Clone> Environment<'a, P> {
         let owner = Pubkey::from_str(value["account"]["owner"].as_str().ok_or_else(|| eyre::eyre!("missing owner"))?)?;
         let executable = value["account"]["executable"].as_bool().ok_or_else(|| eyre::eyre!("missing executable"))?;
         let rent_epoch = value["account"]["rentEpoch"].as_u64().ok_or_else(|| eyre::eyre!("missing rentEpoch"))?;
-        let slot = value["slot"].as_u64(); // Optional, for backwards compatibility
+        let slot = value["slot"].as_u64();
 
         Ok((pubkey, Account { lamports, data, owner, executable, rent_epoch }, slot))
     }
@@ -557,10 +509,7 @@ impl<'a> ConstructSwap<'a> {
 
     pub fn attach_solfiv2_accs(&mut self) {
         self.builder
-            .add_remaining_account(AccountMeta::new_readonly(
-                Pubkey::from_str(&magnus_shared::pmm_solfi_v2::id().to_string()).unwrap(),
-                false,
-            ))
+            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_solfi_v2::id().to_bytes()), false))
             .add_remaining_account(AccountMeta::new(self.payer, true))
             .add_remaining_account(AccountMeta::new(self.sta, false))
             .add_remaining_account(AccountMeta::new(self.dta, false))
@@ -578,10 +527,7 @@ impl<'a> ConstructSwap<'a> {
 
     pub fn attach_humidifi_accs(&mut self) {
         self.builder
-            .add_remaining_account(AccountMeta::new_readonly(
-                Pubkey::from_str(&magnus_shared::pmm_humidifi::id().to_string()).unwrap(),
-                false,
-            ))
+            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()), false))
             .add_remaining_account(AccountMeta::new(self.payer, true))
             .add_remaining_account(AccountMeta::new(self.sta, false))
             .add_remaining_account(AccountMeta::new(self.dta, false))
@@ -596,10 +542,7 @@ impl<'a> ConstructSwap<'a> {
 
     pub fn attach_zerofi_accs(&mut self) {
         self.builder
-            .add_remaining_account(AccountMeta::new_readonly(
-                Pubkey::from_str(&magnus_shared::pmm_zerofi::id().to_string()).unwrap(),
-                false,
-            ))
+            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_zerofi::id().to_bytes()), false))
             .add_remaining_account(AccountMeta::new(self.payer, true))
             .add_remaining_account(AccountMeta::new(self.sta, false))
             .add_remaining_account(AccountMeta::new(self.dta, false))
@@ -614,10 +557,7 @@ impl<'a> ConstructSwap<'a> {
 
     pub fn attach_obric_v2_accs(&mut self) {
         self.builder
-            .add_remaining_account(AccountMeta::new_readonly(
-                Pubkey::from_str(&magnus_shared::pmm_obric_v2::id().to_string()).unwrap(),
-                false,
-            ))
+            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_obric_v2::id().to_bytes()), false))
             .add_remaining_account(AccountMeta::new(self.payer, true))
             .add_remaining_account(AccountMeta::new(self.sta, false))
             .add_remaining_account(AccountMeta::new(self.dta, false))
@@ -693,10 +633,25 @@ impl Misc {
         }
     }
 
-    fn fetch_dex_accounts(
-        dexes: &[Dex],
-        client: &RpcClient,
-    ) -> eyre::Result<(u64, Vec<(Dex, Vec<(Pubkey, Account)>)>)> {
+    fn get_decimals(mint: &Pubkey) -> u8 {
+        match *mint {
+            consts::WSOL => consts::WSOL_DECIMALS,
+            consts::USDC => consts::USDC_DECIMALS,
+            consts::USDT => consts::USDT_DECIMALS,
+            _ => 9,
+        }
+    }
+
+    fn get_mint_naming(mint: &Pubkey) -> &'static str {
+        match *mint {
+            consts::WSOL => "WSOL",
+            consts::USDC => "USDC",
+            consts::USDT => "USDT",
+            _ => "UNKNOWN",
+        }
+    }
+
+    fn fetch_dex_accounts(dexes: &[Dex], client: &RpcClient) -> eyre::Result<(u64, Vec<(Dex, Vec<(Pubkey, Account)>)>)> {
         let slot = client.get_slot()?;
         let unique_dexes: HashSet<_> = dexes.iter().collect();
         let mut results = vec![];
@@ -793,22 +748,20 @@ impl Run {
 
         // - mint only the source token's desired amount (i.e the amount we're going to swap)
         // - airdrop some SOL to cover fees
-        env.setup_wallet(&src_mint, common.amount_in * 10u64.pow(env.get_decimals(&src_mint) as u32), 10_000_000_000)?;
+        env.setup_wallet(&src_mint, common.amount_in * 10u64.pow(Misc::get_decimals(&src_mint) as u32), 10_000_000_000)?;
+        info!(?env);
 
-        let (src_ata, src_name) = (env.wallet_ata(&src_mint), env.get_mint_naming(&src_mint));
-        let (dst_ata, dst_name) = (env.wallet_ata(&dst_mint), env.get_mint_naming(&dst_mint));
+        let (src_ata, src_name) = (env.wallet_ata(&src_mint), Misc::get_mint_naming(&src_mint));
+        let (dst_ata, dst_name) = (env.wallet_ata(&dst_mint), Misc::get_mint_naming(&dst_mint));
 
-        let src_before = env.token_balance(&src_mint) as f64 / 10_f64.powi(env.get_decimals(&src_mint) as i32);
-        let dst_before = env.token_balance(&dst_mint) as f64 / 10_f64.powi(env.get_decimals(&dst_mint) as i32);
+        let src_before = env.token_balance(&src_mint) as f64 / 10_f64.powi(Misc::get_decimals(&src_mint) as i32);
+        let dst_before = env.token_balance(&dst_mint) as f64 / 10_f64.powi(Misc::get_decimals(&dst_mint) as i32);
         info!("before: {} ({}) = {} | {} ({}) = {}", src_name, src_mint, src_before, dst_name, dst_mint, dst_before);
 
-        let routes: Vec<Route> = dexes
-            .iter()
-            .zip(weights.iter())
-            .map(|(dex, weight)| Route { dexes: dex.clone(), weights: weight.clone() })
-            .collect();
+        let routes: Vec<Route> =
+            dexes.iter().zip(weights.iter()).map(|(dex, weight)| Route { dexes: dex.clone(), weights: weight.clone() }).collect();
 
-        let norm_amount_in = common.amount_in * 10u64.pow(env.get_decimals(&src_mint) as u32);
+        let norm_amount_in = common.amount_in * 10u64.pow(Misc::get_decimals(&src_mint) as u32);
         info!("swapping {} {} via routes: {:?}", common.amount_in, src_name, routes);
 
         let mut swap_builder = SwapBuilder::new();
@@ -841,26 +794,15 @@ impl Run {
         let swap_ix = construct.instruction();
         debug!("router program id: {}", swap_ix.program_id);
 
-        let tx = Transaction::new_signed_with_payer(
-            &[swap_ix],
-            Some(&env.wallet_pubkey()),
-            &[&env.wallet],
-            env.latest_blockhash(),
-        );
+        let tx = Transaction::new_signed_with_payer(&[swap_ix], Some(&env.wallet_pubkey()), &[&env.wallet], env.latest_blockhash());
         env.send_transaction(tx).expect("failed to exec tx");
 
         let (src_after, dst_after) = (
-            env.token_balance(&src_mint) as f64 / 10_f64.powi(env.get_decimals(&src_mint) as i32),
-            env.token_balance(&dst_mint) as f64 / 10_f64.powi(env.get_decimals(&dst_mint) as i32),
+            env.token_balance(&src_mint) as f64 / 10_f64.powi(Misc::get_decimals(&src_mint) as i32),
+            env.token_balance(&dst_mint) as f64 / 10_f64.powi(Misc::get_decimals(&dst_mint) as i32),
         );
         info!("after: {} = {:.6} | {} = {:.6}", src_name, src_after, dst_name, dst_after);
-        info!(
-            "diff: {} spent = {:.6} | {} received = {:.6}",
-            src_name,
-            src_before - src_after,
-            dst_name,
-            dst_after - dst_before
-        );
+        info!("diff: {} spent = {:.6} | {} received = {:.6}", src_name, src_before - src_after, dst_name, dst_after - dst_before);
 
         Ok(())
     }
@@ -873,8 +815,7 @@ fn main() -> eyre::Result<()> {
         .with_target(true)
         .with_timer(UtcTime::rfc_3339())
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::default().add_directive(tracing::Level::INFO.into())),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::default().add_directive(tracing::Level::INFO.into())),
         )
         .init();
 
@@ -934,10 +875,7 @@ mod tests {
     fn test_parse_nested_dexes_no_quotes_all_dexes() {
         let input = "[[raydium-cl-v2,raydium-cp],[obric-v2,solfi-v2,zerofi,humidifi]]";
         let result = CliArgs::parse_nested_dexes(input).unwrap();
-        assert_eq!(
-            result,
-            vec![vec![Dex::RaydiumClV2, Dex::RaydiumCp], vec![Dex::ObricV2, Dex::SolfiV2, Dex::Zerofi, Dex::Humidifi],]
-        );
+        assert_eq!(result, vec![vec![Dex::RaydiumClV2, Dex::RaydiumCp], vec![Dex::ObricV2, Dex::SolfiV2, Dex::Zerofi, Dex::Humidifi],]);
     }
 
     #[test]
