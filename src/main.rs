@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![allow(clippy::type_complexity, clippy::result_large_err)]
 #![deny(unused)]
-
+//!
 //! Simulation environment for Solana Proprietary AMM swaps.
 //!
 //! Simulate Swaps across *any* of the major Solana Proprietary AMMs, locally, using LiteSVM.
@@ -555,8 +555,8 @@ impl<'a> ConstructSwap<'a> {
                 .add_remaining_account(AccountMeta::new(cfg.market, false))
                 .add_remaining_account(AccountMeta::new_readonly(cfg.oracle, false))
                 .add_remaining_account(AccountMeta::new_readonly(cfg.cfg, false))
-                .add_remaining_account(AccountMeta::new(cfg.pool_base_vault, false))
-                .add_remaining_account(AccountMeta::new(cfg.pool_quote_vault, false))
+                .add_remaining_account(AccountMeta::new(cfg.base_token_acc, false))
+                .add_remaining_account(AccountMeta::new(cfg.quote_token_acc, false))
                 .add_remaining_account(AccountMeta::new_readonly(consts::WSOL, false))
                 .add_remaining_account(AccountMeta::new_readonly(consts::USDC, false))
                 .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
@@ -579,8 +579,8 @@ impl<'a> ConstructSwap<'a> {
                 .add_remaining_account(AccountMeta::new(self.dta, false))
                 .add_remaining_account(AccountMeta::new_readonly(Misc::create_humidifi_param(1500), false))
                 .add_remaining_account(AccountMeta::new(cfg.market, false))
-                .add_remaining_account(AccountMeta::new(cfg.base_token_account, false))
-                .add_remaining_account(AccountMeta::new(cfg.quote_token_account, false))
+                .add_remaining_account(AccountMeta::new(cfg.base_token_acc, false))
+                .add_remaining_account(AccountMeta::new(cfg.quote_token_acc, false))
                 .add_remaining_account(AccountMeta::new_readonly(sysvar::clock::id(), false))
                 .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
                 .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
@@ -644,8 +644,8 @@ impl<'a> ConstructSwap<'a> {
                 .add_remaining_account(AccountMeta::new(self.dta, false))
                 .add_remaining_account(AccountMeta::new_readonly(cfg.global_state, false))
                 .add_remaining_account(AccountMeta::new(cfg.market, false))
-                .add_remaining_account(AccountMeta::new(cfg.base_token_account, false))
-                .add_remaining_account(AccountMeta::new(cfg.quote_token_account, false))
+                .add_remaining_account(AccountMeta::new(cfg.base_token_acc, false))
+                .add_remaining_account(AccountMeta::new(cfg.quote_token_acc, false))
                 .add_remaining_account(AccountMeta::new_readonly(*src_mint, false))
                 .add_remaining_account(AccountMeta::new_readonly(*dst_mint, false))
                 .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
@@ -653,6 +653,31 @@ impl<'a> ConstructSwap<'a> {
                 .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
         } else {
             panic!("Tessera config is missing, cannot attach accounts.");
+        }
+    }
+
+    pub fn attach_goonfi_accs(&mut self) {
+        if let Some(cfg) = &self.cfg.goonfi {
+            let goonfi_param_bytes = [0u8; 32];
+            let goonfi_param = Pubkey::new_from_array(goonfi_param_bytes);
+
+            self.builder
+                .add_remaining_account(AccountMeta::new_readonly(
+                    Pubkey::new_from_array(magnus_shared::pmm_goonfi::id().to_bytes()),
+                    false,
+                ))
+                .add_remaining_account(AccountMeta::new(self.payer, true))
+                .add_remaining_account(AccountMeta::new(self.sta, false))
+                .add_remaining_account(AccountMeta::new(self.dta, false))
+                .add_remaining_account(AccountMeta::new_readonly(goonfi_param, false))  // position 4
+                .add_remaining_account(AccountMeta::new(cfg.market, false))
+                .add_remaining_account(AccountMeta::new(cfg.base_token_acc, false))   // base_vault, not base_token_account
+                .add_remaining_account(AccountMeta::new(cfg.quote_token_acc, false))  // quote_vault, not quote_token_account
+                .add_remaining_account(AccountMeta::new_readonly(cfg.blacklist, false))  // position 8
+                .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false));
+        } else {
+            panic!("Goonfi config is missing, cannot attach accounts.");
         }
     }
 }
@@ -819,8 +844,6 @@ impl Run {
             .map(|(dex_group, weight_group)| vec![Route { dexes: dex_group.clone(), weights: weight_group.clone() }.into()])
             .collect();
 
-        info!("ROUTES LEN: {}", routes.len());
-
         let norm_amount_in: Vec<u64> = amount_in.iter().map(|amount| amount * 10u64.pow(src_dec as u32)).collect();
         info!("swapping {:?} {} via routes: {:?}", norm_amount_in, src_name, routes);
 
@@ -841,18 +864,19 @@ impl Run {
         let mut construct = ConstructSwap { cfg: self.cfg.clone(), builder: swap, payer: env.wallet_pubkey(), sta: src_ata, dta: dst_ata };
 
         // attach the necessary accounts for each of the implemented Prop AMMs
-        for dex in flat_pmms.iter() {
-            match dex {
+        flat_pmms.iter().for_each(|pmm| {
+            match pmm {
                 Dex::Humidifi => construct.attach_humidifi_accs(),
                 Dex::SolfiV2 => construct.attach_solfiv2_accs(),
                 Dex::Zerofi => construct.attach_zerofi_accs(),
                 Dex::ObricV2 => construct.attach_obric_v2_accs(),
                 Dex::Tessera => construct.attach_tessera_accs(&src_mint, &dst_mint),
+                Dex::Goonfi => construct.attach_goonfi_accs(),
                 _ => {
                     unimplemented!()
                 }
             };
-        }
+        });
 
         let swap_ix = construct.instruction();
         debug!("router program id: {}", swap_ix.program_id);

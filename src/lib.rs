@@ -81,17 +81,29 @@ macro_rules! define_dex_configs {
 
 // Define all DEX configurations
 define_dex_configs! {
-    SolfiV2 => SolfiV2Cfg : solfi_v2 ("solfi-v2") {
-        market,
-        pool_base_vault,
-        pool_quote_vault,
-        cfg,
-        oracle,
-    },
     Humidifi => HumidifiCfg : humidifi ("humidifi") {
         market,
-        base_token_account,
-        quote_token_account,
+        base_token_acc,
+        quote_token_acc,
+    },
+    Tessera => TesseraCfg : tessera ("tessera") {
+        market,
+        base_token_acc,
+        quote_token_acc,
+        global_state,
+    },
+    Goonfi => GoonfiCfg : goonfi ("goonfi") {
+        market,
+        base_token_acc,
+        quote_token_acc,
+        blacklist,
+    },
+    SolfiV2 => SolfiV2Cfg : solfi_v2 ("solfi-v2") {
+        market,
+        base_token_acc,
+        quote_token_acc,
+        cfg,
+        oracle,
     },
     Zerofi => ZerofiCfg : zerofi ("zerofi") {
         pair,
@@ -109,11 +121,5 @@ define_dex_configs! {
         ref_oracle,
         x_price_feed,
         y_price_feed,
-    },
-    Tessera => TesseraCfg : tessera ("tessera") {
-        global_state,
-        market,
-        base_token_account,
-        quote_token_account,
     },
 }

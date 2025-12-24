@@ -8,27 +8,31 @@ Supported AMMs:
 - [x] SolfiV2
 - [x] ObricV2
 - [x] Zerofi
-- [ ] TesseraV
-- [ ] Goonfi
+- [x] TesseraV
+- [x] Goonfi
 
 The swaps can be done either with the local static accounts that can be found at [cfg/accounts](./cfg/accounts) or with the current live accounts (by fetching them on-the-go). By default all swaps are done with the live accounts.
 
 ## Examples
 
-```
-# Swaps 150,000 USDC to WSOL using Humidifi and SolfiV2 - 75000 USDC per Prop AMM
+Swaps 150,000 USDC to WSOL using Humidifi and SolfiV2 - split evenly - 75000 USDC per Prop AMM
 
+```
 cargo r -- single --pmms=humidifi,solfi-v2 --weights=50,50 --amount-in=150000 --src-token=USDC --dst-token=WSOL
 ```
 
-```
-# Swaps 10,000 USDC to USDT using ObricV2
+Swaps 10,000 USDC to USDT using ObricV2
 
+```
 cargo r -- single --amount-in=10000 --pmms=obric-v2 --weights=100 --src-token=USDC --dst-token=USDT
 ```
 
 ```
-# Locally sync the current live accounts for all supported AMMs
+cargo r -- multi --pmms="[[humidifi,solfi-v2],[humidifi]]" --weights "[[99, 1],[100]]" --amount-in=100,3
+```
 
+Locally sync the current (live) accounts for all supported Prop AMMs
+
+```
 cargo r -- fetch-accounts
 ```

@@ -1,15 +1,32 @@
+# https://solscan.io/account/DB3sUCP2H4icbeKmK6yb6nUxU5ogbcRHtGuq7W2RoRwW
 [humidifi]
 market = "DB3sUCP2H4icbeKmK6yb6nUxU5ogbcRHtGuq7W2RoRwW"
-base_token_account = "8BrVfsvzb1DZqCactbYWoKSv24AfsLBuXJqzpzYCwznF"
-quote_token_account = "HsQcHFFNUVTp3MWrXYbuZchBNd4Pwk8636bKzLvpfYNR"
+base_token_acc = "8BrVfsvzb1DZqCactbYWoKSv24AfsLBuXJqzpzYCwznF"
+quote_token_acc = "HsQcHFFNUVTp3MWrXYbuZchBNd4Pwk8636bKzLvpfYNR"
 
+# https://solscan.io/account/FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n
+[tessera]
+market = "FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n"
+base_token_acc = "5pVN5XZB8cYBjNLFrsBCPWkCQBan5K5Mq2dWGzwPgGJV"
+quote_token_acc = "9t4P5wMwfFkyn92Z7hf463qYKEZf8ERVZsGBEPNp8uJx"
+global_state = "8ekCy2jHHUbW2yeNGFWYJT9Hm9FW7SvZcZK66dSZCDiF"
+
+# https://solscan.io/account/4uWuh9fC7rrZKrN8ZdJf69MN1e2S7FPpMqcsyY1aof6K
+[goonfi]
+market = "4uWuh9fC7rrZKrN8ZdJf69MN1e2S7FPpMqcsyY1aof6K"
+base_token_acc = "pKiUC9hDXv52xqU1p3BKypV9AQjAMgfZUGRnoBsdkKm"
+quote_token_acc = "Gsy5Zr7Vxn5KckAbduPHHGR1qzPJ4w3GSYmcinWAkhrC"
+blacklist = "7XqYD6DEGmDXooB1E8NNRWV9pWAmm1z6WYpsfjnABTUz"
+
+# https://solscan.io/account/65ZHSArs5XxPseKQbB1B4r16vDxMWnCxHMzogDAqiDUc
 [solfi-v2]
 market = "65ZHSArs5XxPseKQbB1B4r16vDxMWnCxHMzogDAqiDUc"
-pool_base_vault = "CRo8DBwrmd97DJfAnvCv96tZPL5Mktf2NZy2ZnhDer1A"
-pool_quote_vault = "GhFfLFSprPpfoRaWakPMmJTMJBHuz6C694jYwxy2dAic"
+base_token_acc = "CRo8DBwrmd97DJfAnvCv96tZPL5Mktf2NZy2ZnhDer1A"
+quote_token_acc = "GhFfLFSprPpfoRaWakPMmJTMJBHuz6C694jYwxy2dAic"
 cfg = "FmxXDSR9WvpJTCh738D1LEDuhMoA8geCtZgHb3isy7Dp"
 oracle = "2ny7eGyZCoeEVTkNLf5HcnJFBKkyA4p4gcrtb3b8y8ou"
 
+# https://solscan.io/account/2h9hhu3gxY9kCdXEwdTHV8yPAMYVoHgKopRyG1HbDwfi
 [zerofi]
 pair = "2h9hhu3gxY9kCdXEwdTHV8yPAMYVoHgKopRyG1HbDwfi"
 vault_info_base = "7RHJ2WfexqUxy7SXfbNZRZDgZi3D9jtMAQp9VhfzpU8T"
@@ -17,7 +34,8 @@ vault_base = "ERP5RTV6cWmoGrv7r9W2V5pbgDFSepc4j97qNnx1Jris"
 vault_info_quote = "Ef7zPqj4NuZHwaTczUTY9oRbxXrfZseUcKcqPaidCZ5W"
 vault_quote = "7wYJVD8iXmMQjND1fwi1hPr68QwruVVtirbotyJZXaVH"
 
-# ObricV2's USDT-USDC Market (the only currently active one)
+# ObricV2's USDT-USDC Market (the only currently active one
+# https://solscan.io/account/BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG
 [obric-v2]
 trading_pair = "BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG"
 second_ref_oracle = "GZsNmWKbqhMYtdSkkvMdEyQF9k5mLmP7tTKYWZjcHVPE"
@@ -27,10 +45,3 @@ reserve_y = "AAamGhyPfpQJWfZHTq944NM1cFvoVLDrQxt7HGjeRQUS"
 ref_oracle = "J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw"
 x_price_feed = "J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw"
 y_price_feed = "J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw"
-
-# https://solscan.io/account/FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n
-[tessera]
-market = "FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n"
-base_token_account = "5pVN5XZB8cYBjNLFrsBCPWkCQBan5K5Mq2dWGzwPgGJV"
-quote_token_account = "9t4P5wMwfFkyn92Z7hf463qYKEZf8ERVZsGBEPNp8uJx"
-global_state = "8ekCy2jHHUbW2yeNGFWYJT9Hm9FW7SvZcZK66dSZCDiF"
