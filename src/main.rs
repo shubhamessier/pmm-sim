@@ -101,9 +101,6 @@ pub struct CommonArgs {
     )]
     pub jit_accounts: bool,
 
-    #[arg(long, env = "AMOUNT_IN", default_value_t = 1, help = "The amount of tokens to trade")]
-    pub amount_in: u64,
-
     #[arg(long, env = "SRC_TOKEN", default_value = "wsol", help = "Source token: wsol, usdc, or usdt")]
     pub src_token: Token,
 
@@ -134,6 +131,9 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
 
+        #[arg(long, env = "AMOUNT_IN", default_value_t = 1, help = "The amount of tokens to trade")]
+        amount_in: u64,
+
         #[arg(long, value_delimiter = ',', default_value = "humidifi,solfi-v2", help = "Comma-separated list of Prop AMMs")]
         pmms: Vec<Dex>,
 
@@ -157,10 +157,24 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
 
-        #[arg(long, default_value = "[[humidifi]]", help = "JSON nested routes, e.g. '[[dex1,dex2],[dex3]]'")]
+        #[arg(
+            long,
+            env = "AMOUNT_IN",
+            value_delimiter = ',',
+            num_args = 1..,
+            default_values_t = vec![1, 1],
+            help = "Comma-separated amounts for each route, e.g. --amount-in=3,50"
+        )]
+        amount_in: Vec<u64>,
+
+        #[arg(long, default_value = "[[humidifi,solfi-v2],[solfi-v2]]", help = "JSON nested routes, e.g. '[[dex1,dex2],[dex3]]'")]
         pmms: String,
 
-        #[arg(long, default_value = "[[100]]", help = "JSON nested weights matching the prop AMMs structure, e.g. '[[50,50],[100]]'")]
+        #[arg(
+            long,
+            default_value = "[[30,70],[100]]",
+            help = "JSON nested weights matching the prop AMMs structure, e.g. '[[50,50],[100]]'"
+        )]
         weights: String,
     },
 
@@ -735,13 +749,13 @@ impl Run {
     }
 
     fn simulate(&self) -> eyre::Result<()> {
-        let (common, pmms, weights) = match &self.args.command {
-            Command::Single { common, pmms, weights } => (common, vec![pmms.clone()], vec![weights.clone()]),
-            Command::Multi { common, pmms, weights } => {
+        let (common, amount_in, pmms, weights) = match &self.args.command {
+            Command::Single { common, amount_in, pmms, weights } => (common, vec![*amount_in], vec![pmms.clone()], vec![weights.clone()]),
+            Command::Multi { common, amount_in, pmms, weights } => {
                 let pmms = CliArgs::parse_nested_pmms(pmms).expect("invalid format for nested dexes");
                 let weights = CliArgs::parse_nested_weights(weights).expect("invalid format for nested weights");
 
-                (common, pmms, weights)
+                (common, amount_in.clone(), pmms, weights)
             }
             _ => unreachable!(),
         };
@@ -765,7 +779,7 @@ impl Run {
 
         // - mint only the source token's desired amount (i.e the amount we're going to swap)
         // - airdrop some SOL to cover fees
-        env.setup_wallet(&src_mint, common.amount_in * 10u64.pow(src_dec as u32), 10_000_000_000)?;
+        env.setup_wallet(&src_mint, amount_in.iter().sum::<u64>() * 10u64.pow(src_dec as u32), 10_000_000_000)?;
         info!(?env);
 
         let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
@@ -775,11 +789,16 @@ impl Run {
         );
         info!("before: {} = {} | {} = {}", src_name, src_before, dst_name, dst_before);
 
-        let routes: Vec<Route> =
-            pmms.iter().zip(weights.iter()).map(|(dex, weight)| Route { dexes: dex.clone(), weights: weight.clone() }).collect();
+        let routes: Vec<Vec<magnus_router_client::types::Route>> = pmms
+            .iter()
+            .zip(weights.iter())
+            .map(|(dex_group, weight_group)| vec![Route { dexes: dex_group.clone(), weights: weight_group.clone() }.into()])
+            .collect();
 
-        let norm_amount_in = common.amount_in * 10u64.pow(src_dec as u32);
-        info!("swapping {} {} via routes: {:?}", common.amount_in, src_name, routes);
+        info!("ROUTES LEN: {}", routes.len());
+
+        let norm_amount_in: Vec<u64> = amount_in.iter().map(|amount| amount * 10u64.pow(src_dec as u32)).collect();
+        info!("swapping {:?} {} via routes: {:?}", norm_amount_in, src_name, routes);
 
         let mut swap_builder = SwapBuilder::new();
         let swap = swap_builder
@@ -788,11 +807,11 @@ impl Run {
             .destination_token_account(dst_ata)
             .source_mint(src_mint)
             .destination_mint(dst_mint)
-            .amount_in(norm_amount_in)
+            .amount_in(norm_amount_in.iter().sum())
             .expect_amount_out(1)
             .min_return(1)
-            .amounts(vec![norm_amount_in])
-            .routes(vec![routes.iter().map(|route| route.clone().into()).collect()])
+            .amounts(norm_amount_in)
+            .routes(routes)
             .order_id(SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
 
         let mut construct = ConstructSwap { cfg: self.cfg.clone(), builder: swap, payer: env.wallet_pubkey(), sta: src_ata, dta: dst_ata };
