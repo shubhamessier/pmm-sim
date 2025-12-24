@@ -20,6 +20,7 @@ use clap::{Args, Parser, Subcommand};
 use litesvm::LiteSVM;
 use magnus_router_client::instructions::SwapBuilder;
 use magnus_shared::{Dex, Route};
+use pmm_sim::PMMCfg;
 use secrecy::{ExposeSecret, SecretString};
 use solana_client::rpc_client::RpcClient;
 use solana_compute_budget::compute_budget::ComputeBudget;
@@ -34,8 +35,10 @@ use tracing_subscriber::{EnvFilter, fmt::time::UtcTime};
 pub mod consts {
     use solana_sdk::{pubkey, pubkey::Pubkey};
 
-    pub const PROGRAMS_DIR: &str = "cfg/programs";
-    pub const ACCOUNTS_DIR: &str = "cfg/accounts";
+    pub const ROUTER: &str = "magnus-router";
+    pub const SETUP_PATH: &str = "./setup.toml";
+    pub const PROGRAMS_PATH: &str = "./cfg/programs";
+    pub const ACCOUNTS_PATH: &str = "./cfg/accounts";
 
     pub const WSOL: Pubkey = pubkey!("So11111111111111111111111111111111111111112");
     pub const WSOL_DECIMALS: u8 = 9;
@@ -45,68 +48,17 @@ pub mod consts {
 
     pub const USDT: Pubkey = pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
     pub const USDT_DECIMALS: u8 = 6;
-
-    pub mod solfi_v2 {
-        use super::*;
-
-        pub const MARKET: Pubkey = pubkey!("65ZHSArs5XxPseKQbB1B4r16vDxMWnCxHMzogDAqiDUc");
-        pub const POOL_BASE_VAULT: Pubkey = pubkey!("CRo8DBwrmd97DJfAnvCv96tZPL5Mktf2NZy2ZnhDer1A");
-        pub const POOL_QUOTE_VAULT: Pubkey = pubkey!("GhFfLFSprPpfoRaWakPMmJTMJBHuz6C694jYwxy2dAic");
-        pub const CFG: Pubkey = pubkey!("FmxXDSR9WvpJTCh738D1LEDuhMoA8geCtZgHb3isy7Dp");
-        pub const ORACLE: Pubkey = pubkey!("2ny7eGyZCoeEVTkNLf5HcnJFBKkyA4p4gcrtb3b8y8ou");
-
-        pub const ACCOUNTS: [Pubkey; 5] = [MARKET, POOL_BASE_VAULT, POOL_QUOTE_VAULT, CFG, ORACLE];
-    }
-
-    pub mod humidifi {
-        use super::*;
-
-        pub const MARKET: Pubkey = pubkey!("DB3sUCP2H4icbeKmK6yb6nUxU5ogbcRHtGuq7W2RoRwW");
-        pub const BASE_TOKEN_ACCOUNT: Pubkey = pubkey!("8BrVfsvzb1DZqCactbYWoKSv24AfsLBuXJqzpzYCwznF");
-        pub const QUOTE_TOKEN_ACCOUNT: Pubkey = pubkey!("HsQcHFFNUVTp3MWrXYbuZchBNd4Pwk8636bKzLvpfYNR");
-
-        pub const ACCOUNTS: [Pubkey; 3] = [MARKET, BASE_TOKEN_ACCOUNT, QUOTE_TOKEN_ACCOUNT];
-    }
-
-    pub mod zerofi {
-        use super::*;
-
-        pub const PAIR: Pubkey = pubkey!("2h9hhu3gxY9kCdXEwdTHV8yPAMYVoHgKopRyG1HbDwfi");
-        pub const VAULT_INFO_BASE: Pubkey = pubkey!("7RHJ2WfexqUxy7SXfbNZRZDgZi3D9jtMAQp9VhfzpU8T");
-        pub const VAULT_BASE: Pubkey = pubkey!("ERP5RTV6cWmoGrv7r9W2V5pbgDFSepc4j97qNnx1Jris");
-        pub const VAULT_INFO_QUOTE: Pubkey = pubkey!("Ef7zPqj4NuZHwaTczUTY9oRbxXrfZseUcKcqPaidCZ5W");
-        pub const VAULT_QUOTE: Pubkey = pubkey!("7wYJVD8iXmMQjND1fwi1hPr68QwruVVtirbotyJZXaVH");
-
-        pub const ACCOUNTS: [Pubkey; 5] = [PAIR, VAULT_INFO_BASE, VAULT_BASE, VAULT_INFO_QUOTE, VAULT_QUOTE];
-    }
-
-    // Obric's USDT-USDC market (the only one currently supported)
-    pub mod obric_v2 {
-        use super::*;
-
-        pub const TRADING_PAIR: Pubkey = pubkey!("BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG");
-        pub const SECOND_REF_ORACLE: Pubkey = pubkey!("GZsNmWKbqhMYtdSkkvMdEyQF9k5mLmP7tTKYWZjcHVPE");
-        pub const THIRD_REF_ORACLE: Pubkey = pubkey!("6YawcNeZ74tRyCv4UfGydYMr7eho7vbUR6ScVffxKAb3");
-        pub const RESERVE_X: Pubkey = pubkey!("C3tPQ8TRcHybnPpR8KMASUVD3PukQRRHEsLwxorJMhgm");
-        pub const RESERVE_Y: Pubkey = pubkey!("AAamGhyPfpQJWfZHTq944NM1cFvoVLDrQxt7HGjeRQUS");
-        pub const REF_ORACLE: Pubkey = pubkey!("J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw");
-        pub const X_PRICE_FEED: Pubkey = pubkey!("J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw");
-        pub const Y_PRICE_FEED: Pubkey = pubkey!("J4HJYz4p7TRP96WVFky3vh7XryxoFehHjoRySUTeSeXw");
-
-        pub const ACCOUNTS: [Pubkey; 8] =
-            [TRADING_PAIR, SECOND_REF_ORACLE, THIRD_REF_ORACLE, RESERVE_X, RESERVE_Y, REF_ORACLE, X_PRICE_FEED, Y_PRICE_FEED];
-    }
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Simulate Solana Prop AMM swaps locally", long_about = None)]
+#[command(version, about = "Simulation environment for Solana Proprietary AMM swaps.\nSimulate Swaps across *any* of the major Solana Prop AMMs.", long_about = None)]
 pub struct CliArgs {
     #[command(subcommand)]
     pub command: Command,
 }
 
 impl CliArgs {
-    fn parse_nested_dexes(s: &str) -> Result<Vec<Vec<Dex>>, String> {
+    fn parse_nested_pmms(s: &str) -> Result<Vec<Vec<Dex>>, String> {
         if let Ok(parsed) = serde_json::from_str::<Vec<Vec<String>>>(s) {
             return parsed.into_iter().map(|group| group.into_iter().map(|s| s.parse::<Dex>()).collect::<Result<Vec<Dex>, _>>()).collect();
         }
@@ -130,7 +82,7 @@ impl CliArgs {
         serde_json::from_str(s).map_err(|e| format!("invalid format: {}", e))
     }
 
-    fn default_pmm_dexes() -> Vec<Dex> {
+    fn default_pmm() -> Vec<Dex> {
         Dex::PMM.to_vec()
     }
 }
@@ -157,6 +109,15 @@ pub struct CommonArgs {
 
     #[arg(long, env = "DST_TOKEN", default_value = "usdc", help = "Destination token: wsol, usdc, or usdt")]
     pub dst_token: Token,
+
+    #[arg(long, env = "SETUP_PATH", default_value = consts::SETUP_PATH, help = "Path to the setup configuration file")]
+    pub setup_path: String,
+
+    #[arg(long, env = "PROGRAMS_PATH", default_value = consts::PROGRAMS_PATH, help = "Directory to load programs from")]
+    pub programs_path: String,
+
+    #[arg(long, env = "ACCOUNTS_PATH", default_value = consts::ACCOUNTS_PATH, help = "Directory to load accounts from")]
+    pub accounts_path: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -164,17 +125,17 @@ pub enum Command {
     #[command(
         about = "Run a single swap instruction across one or more Prop AMMs with specified weights.",
         after_help = "Examples:
-  pmm-sim single --dexes=humidifi --weights=100 --amount-in=100 --src-token=WSOL --dst-token=USDC
-  pmm-sim single --dexes=humidifi,solfi-v2 --weights=50,50 --amount-in=150000 --src-token=USDC --dst-token=WSOL
-  pmm-sim single --amount-in=10000 --dexes=solfi-v2 --weights=100
-  pmm-sim single --amount-in=10000 --dexes=obric-v2 --weights=100 --src-token=USDC --dst-token=USDT"
+  pmm-sim single --pmms=humidifi --weights=100 --amount-in=100 --src-token=WSOL --dst-token=USDC
+  pmm-sim single --pmms=humidifi,solfi-v2 --weights=50,50 --amount-in=150000 --src-token=USDC --dst-token=WSOL
+  pmm-sim single --amount-in=10000 --pmms=solfi-v2 --weights=100
+  pmm-sim single --amount-in=10000 --pmms=obric-v2 --weights=100 --src-token=USDC --dst-token=USDT"
     )]
     Single {
         #[command(flatten)]
         common: CommonArgs,
 
         #[arg(long, value_delimiter = ',', default_value = "humidifi,solfi-v2", help = "Comma-separated list of Prop AMMs")]
-        dexes: Vec<Dex>,
+        pmms: Vec<Dex>,
 
         #[arg(long, value_delimiter = ',', default_value = "50,50", help = "Comma-separated weights")]
         weights: Vec<u8>,
@@ -184,47 +145,68 @@ pub enum Command {
         about = "Execute multiple swap instructions across nested Prop AMM routes. Each inner list represents a single transaction step.",
         after_help = "Examples:
       # Single step with one DEX
-      pmm-sim multi --dexes='[[humidifi]]' --weights='[[100]]'
+      pmm-sim multi --pmms='[[humidifi]]' --weights='[[100]]'
 
       # Two sequential swaps: (Humidifi + Obric) followed by Zerofi
-      pmm-sim multi --dexes='[[humidifi,zerofi],[solfi-v2]]' --weights='[[50,50],[100]]'
+      pmm-sim multi --pmms='[[humidifi,zerofi],[solfi-v2]]' --weights='[[50,50],[100]]'
 
       # Complex three-step route
-      pmm-sim multi --amount-in 10 --dexes='[[humidifi],[solfi-v2],[zerofi]]' --weights='[[100],[60,40],[100]]'"
+      pmm-sim multi --amount-in 10 --pmms='[[humidifi],[solfi-v2],[zerofi]]' --weights='[[100],[60,40],[100]]'"
     )]
     Multi {
         #[command(flatten)]
         common: CommonArgs,
 
         #[arg(long, default_value = "[[humidifi]]", help = "JSON nested routes, e.g. '[[dex1,dex2],[dex3]]'")]
-        dexes: String,
+        pmms: String,
 
-        #[arg(long, default_value = "[[100]]", help = "JSON nested weights matching the dexes structure, e.g. '[[50,50],[100]]'")]
+        #[arg(long, default_value = "[[100]]", help = "JSON nested weights matching the prop AMMs structure, e.g. '[[50,50],[100]]'")]
         weights: String,
     },
 
     #[command(
         about = "Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).",
         after_help = "Examples:
-  pmm-sim fetch-accounts --dexes=humidifi
-  pmm-sim fetch-accounts --dexes=humidifi,obric-v2,zerofi,solfi-v2pmm-sim \
-                      fetch-accounts --dexes=humidifi --http-url=https://my-rpc.com"
+  pmm-sim fetch-accounts --pmms=humidifi
+  pmm-sim fetch-accounts --pmms=humidifi,obric-v2,zerofi,solfi-v2pmm-sim \
+                      fetch-accounts --pmms=humidifi --http-url=https://my-rpc.com"
     )]
     FetchAccounts {
         #[arg(long, env = "HTTP_URL", default_value = "https://api.mainnet.solana.com")]
         http_url: SecretString,
 
+        #[arg(long, env = "SETUP_PATH", default_value = consts::SETUP_PATH, help = "Path to the setup configuration file")]
+        setup_path: String,
+
+        #[arg(long, env = "ACCOUNTS_PATH", default_value = consts::ACCOUNTS_PATH, help = "Directory to save fetched accounts")]
+        accounts_path: String,
+
         #[arg(
             long,
             value_delimiter = ',',
-            default_values_t = CliArgs::default_pmm_dexes(),
-            help = "Comma-separated list of dexes to fetch accounts for"
+            default_values_t = CliArgs::default_pmm(),
+            help = "Comma-separated list of Prop AMMs to fetch accounts for"
         )]
-        dexes: Vec<Dex>,
-
-        #[arg(long, default_value = consts::ACCOUNTS_DIR, help = "Directory to save fetched accounts")]
-        output_dir: String,
+        pmms: Vec<Dex>,
     },
+}
+
+impl Command {
+    fn setup_path(&self) -> &str {
+        match self {
+            Command::FetchAccounts { setup_path, .. } => setup_path,
+            Command::Single { common, .. } => &common.setup_path,
+            Command::Multi { common, .. } => &common.setup_path,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Command::FetchAccounts { .. } => "FetchAccounts",
+            Command::Single { .. } => "SingleSwap",
+            Command::Multi { .. } => "MultiSwap",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,6 +265,7 @@ struct Environment<'a, P: Into<String> + Display + Clone + Debug> {
     svm: LiteSVM,
     wallet: Keypair,
     mints: Option<&'a [(Pubkey, u8)]>,
+    cfg: PMMCfg,
 
     programs_path: P,
     accounts_path: P,
@@ -300,7 +283,7 @@ impl<'a, P: Into<String> + Display + Clone + std::fmt::Debug> Debug for Environm
 }
 
 impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
-    fn new(programs_path: P, accounts_path: P, mints: Option<&[(Pubkey, u8)]>) -> eyre::Result<Environment<'_, P>> {
+    fn new(programs_path: P, accounts_path: P, mints: Option<&[(Pubkey, u8)]>, cfg: PMMCfg) -> eyre::Result<Environment<'_, P>> {
         let mut budget = ComputeBudget::new_with_defaults(false);
         budget.compute_unit_limit = 20_000_000;
 
@@ -313,7 +296,7 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             }
         }
 
-        Ok(Environment { svm, wallet, programs_path, accounts_path, mints })
+        Ok(Environment { svm, wallet, programs_path, accounts_path, mints, cfg })
     }
 
     fn setup_wallet(&mut self, mint: &Pubkey, mint_amount: u64, airdrop_amount: u64) -> eyre::Result<()> {
@@ -341,12 +324,13 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
         get_associated_token_address(&self.wallet.pubkey(), mint)
     }
 
-    fn load_programs(&mut self, dexes: &[Dex]) -> eyre::Result<()> {
+    fn load_programs(&mut self, pmms: &[Dex]) -> eyre::Result<()> {
         // mandatory load
-        self.svm.add_program_from_file(magnus_router_client::programs::ROUTER_ID, format!("{}/magnus-router.so", self.programs_path))?;
+        self.svm
+            .add_program_from_file(magnus_router_client::programs::ROUTER_ID, format!("{}/{}.so", self.programs_path, consts::ROUTER))?;
 
-        let unique_dexes: HashSet<_> = dexes.iter().collect();
-        for dex in unique_dexes {
+        let unique_pmms: HashSet<_> = pmms.iter().collect();
+        for dex in unique_pmms {
             let program_id = dex.program_id();
 
             self.svm.add_program_from_file(Pubkey::new_from_array(program_id.to_bytes()), format!("{}/{}.so", self.programs_path, dex))?;
@@ -357,25 +341,25 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
         Ok(())
     }
 
-    fn load_accounts(&mut self, dexes: &[Dex], jit: bool, client: Option<&RpcClient>) -> eyre::Result<()> {
+    fn load_accounts(&mut self, pmms: &[Dex], jit: bool, client: Option<&RpcClient>) -> eyre::Result<()> {
         match jit {
             true => {
                 let rpc_client = client.expect("RPC client is required for JIT account loading");
-                self.load_jit_accounts(dexes, rpc_client)?;
+                self.load_jit_accounts(pmms, rpc_client)?;
             }
             false => {
-                self.load_static_accounts(dexes)?;
+                self.load_static_accounts(pmms)?;
             }
         }
 
         Ok(())
     }
 
-    fn load_static_accounts(&mut self, dexes: &[Dex]) -> eyre::Result<()> {
-        let unique_dexes: HashSet<_> = dexes.iter().collect();
+    fn load_static_accounts(&mut self, pmms: &[Dex]) -> eyre::Result<()> {
+        let unique_pmms: HashSet<_> = pmms.iter().collect();
         let mut all_slots: Vec<u64> = vec![];
 
-        for dex in unique_dexes {
+        for dex in unique_pmms {
             let (accounts, slot) = self.read_accounts_from_disk(dex)?;
 
             for (pubkey, account) in accounts {
@@ -397,7 +381,7 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             if all_slots.iter().any(|&s| s != first_slot) {
                 let min_slot = all_slots.iter().min().copied().unwrap();
                 let max_slot = all_slots.iter().max().copied().unwrap();
-                warn!("slot mismatch across dexes: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
+                warn!("slot mismatch across Prop AMMs: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
             }
             self.svm.warp_to_slot(first_slot);
             info!("warped to slot {first_slot}");
@@ -406,8 +390,8 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
         Ok(())
     }
 
-    fn load_jit_accounts(&mut self, dexes: &[Dex], client: &RpcClient) -> eyre::Result<()> {
-        let (slot, fetched) = Misc::fetch_dex_accounts(dexes, client)?;
+    fn load_jit_accounts(&mut self, pmms: &[Dex], client: &RpcClient) -> eyre::Result<()> {
+        let (slot, fetched) = Misc::acquire_pmm_accounts(pmms, client, &self.cfg)?;
 
         for (dex, accounts) in fetched {
             for (pubkey, account) in accounts {
@@ -423,8 +407,8 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
         Ok(())
     }
 
-    fn read_accounts_from_disk(&self, dex: &Dex) -> eyre::Result<(Vec<(Pubkey, Account)>, Option<u64>)> {
-        let prefix = dex.to_string();
+    fn read_accounts_from_disk(&self, pmm: &Dex) -> eyre::Result<(Vec<(Pubkey, Account)>, Option<u64>)> {
+        let prefix = pmm.to_string();
         let accounts_path = format!("{}", self.accounts_path);
         let data_dir = Path::new(&accounts_path);
 
@@ -455,7 +439,7 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             if slots.iter().any(|&s| s != first_slot) {
                 let min_slot = slots.iter().min().copied().unwrap();
                 let max_slot = slots.iter().max().copied().unwrap();
-                warn!("slot mismatch for {dex}: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
+                warn!("slot mismatch for {pmm}: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
             }
             Some(first_slot)
         };
@@ -532,6 +516,7 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
 /// instruction is built using the `SwapBuilder` from the `magnus-router-client`
 /// crate, and then the required accounts for the specific Prop AMM are attached.
 pub struct ConstructSwap<'a> {
+    cfg: PMMCfg,
     builder: &'a mut SwapBuilder,
     payer: Pubkey,
     sta: Pubkey,
@@ -544,68 +529,93 @@ impl<'a> ConstructSwap<'a> {
     }
 
     pub fn attach_solfiv2_accs(&mut self) {
-        self.builder
-            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_solfi_v2::id().to_bytes()), false))
-            .add_remaining_account(AccountMeta::new(self.payer, true))
-            .add_remaining_account(AccountMeta::new(self.sta, false))
-            .add_remaining_account(AccountMeta::new(self.dta, false))
-            .add_remaining_account(AccountMeta::new(consts::solfi_v2::MARKET, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::solfi_v2::ORACLE, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::solfi_v2::CFG, false))
-            .add_remaining_account(AccountMeta::new(consts::solfi_v2::POOL_BASE_VAULT, false))
-            .add_remaining_account(AccountMeta::new(consts::solfi_v2::POOL_QUOTE_VAULT, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::WSOL, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::USDC, false))
-            .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
-            .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
-            .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+        if let Some(cfg) = &self.cfg.solfi_v2 {
+            self.builder
+                .add_remaining_account(AccountMeta::new_readonly(
+                    Pubkey::new_from_array(magnus_shared::pmm_solfi_v2::id().to_bytes()),
+                    false,
+                ))
+                .add_remaining_account(AccountMeta::new(self.payer, true))
+                .add_remaining_account(AccountMeta::new(self.sta, false))
+                .add_remaining_account(AccountMeta::new(self.dta, false))
+                .add_remaining_account(AccountMeta::new(cfg.market, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.oracle, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.cfg, false))
+                .add_remaining_account(AccountMeta::new(cfg.pool_base_vault, false))
+                .add_remaining_account(AccountMeta::new(cfg.pool_quote_vault, false))
+                .add_remaining_account(AccountMeta::new_readonly(consts::WSOL, false))
+                .add_remaining_account(AccountMeta::new_readonly(consts::USDC, false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+        } else {
+            panic!("SolfiV2 config is missing, cannot attach accounts.");
+        }
     }
 
     pub fn attach_humidifi_accs(&mut self) {
-        self.builder
-            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()), false))
-            .add_remaining_account(AccountMeta::new(self.payer, true))
-            .add_remaining_account(AccountMeta::new(self.sta, false))
-            .add_remaining_account(AccountMeta::new(self.dta, false))
-            .add_remaining_account(AccountMeta::new_readonly(Misc::create_humidifi_param(1500), false))
-            .add_remaining_account(AccountMeta::new(consts::humidifi::MARKET, false))
-            .add_remaining_account(AccountMeta::new(consts::humidifi::BASE_TOKEN_ACCOUNT, false))
-            .add_remaining_account(AccountMeta::new(consts::humidifi::QUOTE_TOKEN_ACCOUNT, false))
-            .add_remaining_account(AccountMeta::new_readonly(sysvar::clock::id(), false))
-            .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
-            .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+        if let Some(cfg) = &self.cfg.humidifi {
+            self.builder
+                .add_remaining_account(AccountMeta::new_readonly(
+                    Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()),
+                    false,
+                ))
+                .add_remaining_account(AccountMeta::new(self.payer, true))
+                .add_remaining_account(AccountMeta::new(self.sta, false))
+                .add_remaining_account(AccountMeta::new(self.dta, false))
+                .add_remaining_account(AccountMeta::new_readonly(Misc::create_humidifi_param(1500), false))
+                .add_remaining_account(AccountMeta::new(cfg.market, false))
+                .add_remaining_account(AccountMeta::new(cfg.base_token_account, false))
+                .add_remaining_account(AccountMeta::new(cfg.quote_token_account, false))
+                .add_remaining_account(AccountMeta::new_readonly(sysvar::clock::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+        } else {
+            panic!("Humidifi config is missing, cannot attach accounts.");
+        }
     }
 
     pub fn attach_zerofi_accs(&mut self) {
-        self.builder
-            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_zerofi::id().to_bytes()), false))
-            .add_remaining_account(AccountMeta::new(self.payer, true))
-            .add_remaining_account(AccountMeta::new(self.sta, false))
-            .add_remaining_account(AccountMeta::new(self.dta, false))
-            .add_remaining_account(AccountMeta::new(consts::zerofi::PAIR, false))
-            .add_remaining_account(AccountMeta::new(consts::zerofi::VAULT_INFO_BASE, false))
-            .add_remaining_account(AccountMeta::new(consts::zerofi::VAULT_BASE, false))
-            .add_remaining_account(AccountMeta::new(consts::zerofi::VAULT_INFO_QUOTE, false))
-            .add_remaining_account(AccountMeta::new(consts::zerofi::VAULT_QUOTE, false))
-            .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
-            .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+        if let Some(cfg) = &self.cfg.zerofi {
+            self.builder
+                .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_zerofi::id().to_bytes()), false))
+                .add_remaining_account(AccountMeta::new(self.payer, true))
+                .add_remaining_account(AccountMeta::new(self.sta, false))
+                .add_remaining_account(AccountMeta::new(self.dta, false))
+                .add_remaining_account(AccountMeta::new(cfg.pair, false))
+                .add_remaining_account(AccountMeta::new(cfg.vault_info_base, false))
+                .add_remaining_account(AccountMeta::new(cfg.vault_base, false))
+                .add_remaining_account(AccountMeta::new(cfg.vault_info_quote, false))
+                .add_remaining_account(AccountMeta::new(cfg.vault_quote, false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
+                .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+        } else {
+            panic!("Zerofi config is missing, cannot attach accounts.");
+        }
     }
 
     pub fn attach_obric_v2_accs(&mut self) {
-        self.builder
-            .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_obric_v2::id().to_bytes()), false))
-            .add_remaining_account(AccountMeta::new(self.payer, true))
-            .add_remaining_account(AccountMeta::new(self.sta, false))
-            .add_remaining_account(AccountMeta::new(self.dta, false))
-            .add_remaining_account(AccountMeta::new(consts::obric_v2::TRADING_PAIR, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::obric_v2::SECOND_REF_ORACLE, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::obric_v2::THIRD_REF_ORACLE, false))
-            .add_remaining_account(AccountMeta::new(consts::obric_v2::RESERVE_X, false))
-            .add_remaining_account(AccountMeta::new(consts::obric_v2::RESERVE_Y, false))
-            .add_remaining_account(AccountMeta::new(consts::obric_v2::REF_ORACLE, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::obric_v2::X_PRICE_FEED, false))
-            .add_remaining_account(AccountMeta::new_readonly(consts::obric_v2::Y_PRICE_FEED, false))
-            .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false));
+        if let Some(cfg) = &self.cfg.obric_v2 {
+            self.builder
+                .add_remaining_account(AccountMeta::new_readonly(
+                    Pubkey::new_from_array(magnus_shared::pmm_obric_v2::id().to_bytes()),
+                    false,
+                ))
+                .add_remaining_account(AccountMeta::new(self.payer, true))
+                .add_remaining_account(AccountMeta::new(self.sta, false))
+                .add_remaining_account(AccountMeta::new(self.dta, false))
+                .add_remaining_account(AccountMeta::new(cfg.trading_pair, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.second_ref_oracle, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.third_ref_oracle, false))
+                .add_remaining_account(AccountMeta::new(cfg.reserve_x, false))
+                .add_remaining_account(AccountMeta::new(cfg.reserve_y, false))
+                .add_remaining_account(AccountMeta::new(cfg.ref_oracle, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.x_price_feed, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.y_price_feed, false))
+                .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false));
+        } else {
+            panic!("ObricV2 config is missing, cannot attach accounts.");
+        }
     }
 }
 
@@ -659,24 +669,14 @@ impl Misc {
         Pubkey::new_from_array(bytes)
     }
 
-    fn get_dex_accounts(dex: &Dex) -> Option<Vec<Pubkey>> {
-        match dex {
-            Dex::Humidifi => Some(consts::humidifi::ACCOUNTS.to_vec()),
-            Dex::SolfiV2 => Some(consts::solfi_v2::ACCOUNTS.to_vec()),
-            Dex::Zerofi => Some(consts::zerofi::ACCOUNTS.to_vec()),
-            Dex::ObricV2 => Some(consts::obric_v2::ACCOUNTS.to_vec()),
-            _ => None,
-        }
-    }
-
-    fn fetch_dex_accounts(dexes: &[Dex], client: &RpcClient) -> eyre::Result<(u64, Vec<(Dex, Vec<(Pubkey, Account)>)>)> {
+    fn acquire_pmm_accounts(pmms: &[Dex], client: &RpcClient, cfg: &PMMCfg) -> eyre::Result<(u64, Vec<(Dex, Vec<(Pubkey, Account)>)>)> {
         let slot = client.get_slot()?;
-        let unique_dexes: HashSet<_> = dexes.iter().collect();
+        let unique_pmms: HashSet<_> = pmms.iter().collect();
         let mut results = vec![];
 
-        for dex in unique_dexes {
-            let Some(accounts) = Misc::get_dex_accounts(dex) else {
-                warn!("skipping unsupported dex: {dex}");
+        for dex in unique_pmms {
+            let Some(accounts) = cfg.get_accounts(dex) else {
+                warn!("skipping unsupported prop amms: {dex}");
                 continue;
             };
 
@@ -701,11 +701,12 @@ impl Misc {
 
 pub struct Run {
     args: CliArgs,
+    cfg: PMMCfg,
 }
 
 impl Run {
-    fn new(args: CliArgs) -> Self {
-        Self { args }
+    fn new(args: CliArgs, cfg: PMMCfg) -> Self {
+        Self { args, cfg }
     }
 
     fn run(&self) -> eyre::Result<()> {
@@ -716,12 +717,12 @@ impl Run {
     }
 
     fn fetch_accounts(&self) -> eyre::Result<()> {
-        let Command::FetchAccounts { http_url, dexes, output_dir } = &self.args.command else { unreachable!() };
+        let Command::FetchAccounts { http_url, accounts_path, pmms, .. } = &self.args.command else { unreachable!() };
 
         let rpc_client = RpcClient::new(http_url.expose_secret().to_string());
-        let env = Environment::new(consts::PROGRAMS_DIR, output_dir.as_str(), None)?;
+        let env = Environment::new("", accounts_path, None, self.cfg.clone())?;
 
-        let (slot, fetched) = Misc::fetch_dex_accounts(dexes, &rpc_client)?;
+        let (slot, fetched) = Misc::acquire_pmm_accounts(pmms, &rpc_client, &self.cfg)?;
         for (dex, accounts) in fetched {
             for (pubkey, account) in accounts {
                 env.save_account_to_disk(&dex, &pubkey, &account, slot)?;
@@ -734,10 +735,10 @@ impl Run {
     }
 
     fn simulate(&self) -> eyre::Result<()> {
-        let (common, dexes, weights) = match &self.args.command {
-            Command::Single { common, dexes, weights } => (common, vec![dexes.clone()], vec![weights.clone()]),
-            Command::Multi { common, dexes, weights } => {
-                let pmms = CliArgs::parse_nested_dexes(dexes).expect("invalid format for nested dexes");
+        let (common, pmms, weights) = match &self.args.command {
+            Command::Single { common, pmms, weights } => (common, vec![pmms.clone()], vec![weights.clone()]),
+            Command::Multi { common, pmms, weights } => {
+                let pmms = CliArgs::parse_nested_pmms(pmms).expect("invalid format for nested dexes");
                 let weights = CliArgs::parse_nested_weights(weights).expect("invalid format for nested weights");
 
                 (common, pmms, weights)
@@ -746,21 +747,21 @@ impl Run {
         };
 
         // ensure that each dex has a corresponding weight
-        assert_eq!(dexes.len(), weights.len(), "dexes and weights outer length mismatch");
-        for (d, w) in dexes.iter().zip(weights.iter()) {
+        assert_eq!(pmms.len(), weights.len(), "dexes and weights outer length mismatch");
+        for (d, w) in pmms.iter().zip(weights.iter()) {
             assert_eq!(d.len(), w.len(), "dexes and weights length mismatch");
         }
 
         let rpc_client = RpcClient::new(common.http_url.expose_secret().to_string());
-        let flat_dexes: Vec<Dex> = dexes.iter().flatten().copied().collect();
+        let flat_pmms: Vec<Dex> = pmms.iter().flatten().copied().collect();
 
         let (src_mint, src_dec, src_name) = (common.src_token.get_addr(), common.src_token.get_decimals(), common.src_token.to_string());
         let (dst_mint, dst_dec, dst_name) = (common.dst_token.get_addr(), common.dst_token.get_decimals(), common.dst_token.to_string());
         let mints = vec![(src_mint, src_dec), (dst_mint, dst_dec)];
 
-        let mut env = Environment::new(consts::PROGRAMS_DIR, consts::ACCOUNTS_DIR, Some(&mints))?;
-        env.load_programs(&flat_dexes)?;
-        env.load_accounts(&flat_dexes, common.jit_accounts, Some(&rpc_client))?;
+        let mut env = Environment::new(consts::PROGRAMS_PATH, consts::ACCOUNTS_PATH, Some(&mints), self.cfg.clone())?;
+        env.load_programs(&flat_pmms)?;
+        env.load_accounts(&flat_pmms, common.jit_accounts, Some(&rpc_client))?;
 
         // - mint only the source token's desired amount (i.e the amount we're going to swap)
         // - airdrop some SOL to cover fees
@@ -775,7 +776,7 @@ impl Run {
         info!("before: {} = {} | {} = {}", src_name, src_before, dst_name, dst_before);
 
         let routes: Vec<Route> =
-            dexes.iter().zip(weights.iter()).map(|(dex, weight)| Route { dexes: dex.clone(), weights: weight.clone() }).collect();
+            pmms.iter().zip(weights.iter()).map(|(dex, weight)| Route { dexes: dex.clone(), weights: weight.clone() }).collect();
 
         let norm_amount_in = common.amount_in * 10u64.pow(src_dec as u32);
         info!("swapping {} {} via routes: {:?}", common.amount_in, src_name, routes);
@@ -794,10 +795,10 @@ impl Run {
             .routes(vec![routes.iter().map(|route| route.clone().into()).collect()])
             .order_id(SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
 
-        let mut construct = ConstructSwap { builder: swap, payer: env.wallet_pubkey(), sta: src_ata, dta: dst_ata };
+        let mut construct = ConstructSwap { cfg: self.cfg.clone(), builder: swap, payer: env.wallet_pubkey(), sta: src_ata, dta: dst_ata };
 
         // attach the necessary accounts for each of the implemented Prop AMMs
-        for dex in flat_dexes.iter() {
+        for dex in flat_pmms.iter() {
             match dex {
                 Dex::Humidifi => construct.attach_humidifi_accs(),
                 Dex::SolfiV2 => construct.attach_solfiv2_accs(),
@@ -837,9 +838,11 @@ fn main() -> eyre::Result<()> {
         .init();
 
     let args = CliArgs::parse();
-    info!(?args);
+    info!(?args, command = args.command.name());
 
-    Run::new(args).run()
+    let cfg = PMMCfg::load(args.command.setup_path())?;
+
+    Run::new(args, cfg).run()
 }
 
 #[cfg(test)]
@@ -847,72 +850,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_nested_dexes_json_single() {
+    fn test_parse_nested_pmms_json_single() {
         let input = r#"[["humidifi"]]"#;
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::Humidifi]]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_json_multiple() {
+    fn test_parse_nested_pmms_json_multiple() {
         let input = r#"[["humidifi","obric-v2"],["zerofi"]]"#;
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2], vec![Dex::Zerofi]]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_no_quotes_single() {
+    fn test_parse_nested_pmms_no_quotes_single() {
         let input = "[[humidifi]]";
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::Humidifi]]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_no_quotes_single_route_multiple_dexes() {
+    fn test_parse_nested_pmms_no_quotes_single_route_multiple_pmms() {
         let input = "[[humidifi,obric-v2]]";
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2]]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_no_quotes_multiple_routes() {
+    fn test_parse_nested_pmms_no_quotes_multiple_routes() {
         let input = "[[humidifi,obric-v2],[zerofi]]";
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2], vec![Dex::Zerofi]]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_no_quotes_three_routes() {
+    fn test_parse_nested_pmms_no_quotes_three_routes() {
         let input = "[[humidifi],[obric-v2,solfi-v2],[zerofi]]";
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::Humidifi], vec![Dex::ObricV2, Dex::SolfiV2], vec![Dex::Zerofi],]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_no_quotes_all_dexes() {
+    fn test_parse_nested_pmms_no_quotes_all_pmms() {
         let input = "[[raydium-cl-v2,raydium-cp],[obric-v2,solfi-v2,zerofi,humidifi]]";
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::RaydiumClV2, Dex::RaydiumCp], vec![Dex::ObricV2, Dex::SolfiV2, Dex::Zerofi, Dex::Humidifi],]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_no_quotes_with_spaces() {
+    fn test_parse_nested_pmms_no_quotes_with_spaces() {
         let input = "[[ humidifi , obric-v2 ],[ zerofi ]]";
-        let result = CliArgs::parse_nested_dexes(input).unwrap();
+        let result = CliArgs::parse_nested_pmms(input).unwrap();
         assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2], vec![Dex::Zerofi]]);
     }
 
     #[test]
-    fn test_parse_nested_dexes_invalid_dex() {
+    fn test_parse_nested_pmms_invalid_pmm() {
         let input = "[[humidifi,invalid-dex]]";
-        let result = CliArgs::parse_nested_dexes(input);
+        let result = CliArgs::parse_nested_pmms(input);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_parse_nested_dexes_invalid_format() {
+    fn test_parse_nested_pmms_invalid_format() {
         let input = "[humidifi]"; // not nested
-        let result = CliArgs::parse_nested_dexes(input);
+        let result = CliArgs::parse_nested_pmms(input);
         assert!(result.is_err());
     }
 
@@ -938,15 +941,15 @@ mod tests {
     }
 
     #[test]
-    fn test_dexes_and_weights_match() {
-        let dexes_input = "[[humidifi,obric-v2],[zerofi]]";
+    fn test_pmms_and_weights_match() {
+        let pmms_input = "[[humidifi,obric-v2],[zerofi]]";
         let weights_input = "[[50,50],[100]]";
 
-        let dexes = CliArgs::parse_nested_dexes(dexes_input).unwrap();
+        let pmms = CliArgs::parse_nested_pmms(pmms_input).unwrap();
         let weights = CliArgs::parse_nested_weights(weights_input).unwrap();
 
-        assert_eq!(dexes.len(), weights.len());
-        for (d, w) in dexes.iter().zip(weights.iter()) {
+        assert_eq!(pmms.len(), weights.len());
+        for (d, w) in pmms.iter().zip(weights.iter()) {
             assert_eq!(d.len(), w.len());
         }
     }
