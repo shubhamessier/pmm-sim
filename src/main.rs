@@ -131,8 +131,8 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
 
-        #[arg(long, env = "AMOUNT_IN", default_value_t = 1, help = "The amount of tokens to trade")]
-        amount_in: u64,
+        #[arg(long, env = "AMOUNT_IN", default_value_t = 1.0, help = "The amount of tokens to trade")]
+        amount_in: f64,
 
         #[arg(long, value_delimiter = ',', default_value = "humidifi,solfi-v2", help = "Comma-separated list of Prop AMMs")]
         pmms: Vec<Dex>,
@@ -162,10 +162,10 @@ pub enum Command {
             env = "AMOUNT_IN",
             value_delimiter = ',',
             num_args = 1..,
-            default_values_t = vec![1, 1],
+            default_values_t = vec![1.0, 1.0],
             help = "Comma-separated amounts for each route, e.g. --amount-in=3,50"
         )]
-        amount_in: Vec<u64>,
+        amount_in: Vec<f64>,
 
         #[arg(long, default_value = "[[humidifi,solfi-v2],[solfi-v2]]", help = "JSON nested routes, e.g. '[[dex1,dex2],[dex3]]'")]
         pmms: String,
@@ -822,13 +822,16 @@ impl Run {
         let (dst_mint, dst_dec, dst_name) = (common.dst_token.get_addr(), common.dst_token.get_decimals(), common.dst_token.to_string());
         let mints = vec![(src_mint, src_dec), (dst_mint, dst_dec)];
 
-        let mut env = Environment::new(consts::PROGRAMS_PATH, consts::ACCOUNTS_PATH, Some(&mints), self.cfg.clone())?;
+        let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(&mints), self.cfg.clone())?;
         env.load_programs(&flat_pmms)?;
         env.load_accounts(&flat_pmms, common.jit_accounts, Some(&rpc_client))?;
 
+        let norm_amount_in: Vec<u64> = amount_in.iter().map(|amount| amount * 10f64.powi(src_dec as i32)).map(|a| a as u64).collect();
+        let norm_amount_in_sum: u64 = norm_amount_in.iter().sum();
+
         // - mint only the source token's desired amount (i.e the amount we're going to swap)
         // - airdrop some SOL to cover fees
-        env.setup_wallet(&src_mint, amount_in.iter().sum::<u64>() * 10u64.pow(src_dec as u32), 10_000_000_000)?;
+        env.setup_wallet(&src_mint, norm_amount_in_sum, 10_000_000_000)?;
         info!(?env);
 
         let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
@@ -841,10 +844,9 @@ impl Run {
         let routes: Vec<Vec<magnus_router_client::types::Route>> = pmms
             .iter()
             .zip(weights.iter())
-            .map(|(dex_group, weight_group)| vec![Route { dexes: dex_group.clone(), weights: weight_group.clone() }.into()])
+            .map(|(dex_grp, weight_grp)| vec![Route { dexes: dex_grp.clone(), weights: weight_grp.clone() }.into()])
             .collect();
 
-        let norm_amount_in: Vec<u64> = amount_in.iter().map(|amount| amount * 10u64.pow(src_dec as u32)).collect();
         info!("swapping {:?} {} via routes: {:?}", norm_amount_in, src_name, routes);
 
         let mut swap_builder = SwapBuilder::new();
@@ -854,7 +856,7 @@ impl Run {
             .destination_token_account(dst_ata)
             .source_mint(src_mint)
             .destination_mint(dst_mint)
-            .amount_in(norm_amount_in.iter().sum())
+            .amount_in(norm_amount_in_sum)
             .expect_amount_out(1)
             .min_return(1)
             .amounts(norm_amount_in)
