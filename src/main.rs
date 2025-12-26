@@ -2,9 +2,9 @@
 #![allow(clippy::type_complexity, clippy::result_large_err)]
 #![deny(unused)]
 //!
-//! Simulation environment for Solana Proprietary AMM swaps.
+//! Simulation environment for Solana's Proprietary AMMs.
 //!
-//! Simulate Swaps across *any* of the major Solana Proprietary AMMs, locally, using LiteSVM.
+//! Simulate and/or Benchmark swaps across *any* of the major Solana Proprietary AMMs, locally, using LiteSVM.
 use std::{
     collections::HashSet,
     fmt::{Debug, Display},
@@ -16,12 +16,15 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose};
+use chrono::Local;
 use clap::{Args, Parser, Subcommand};
-use litesvm::LiteSVM;
+use csv::Writer;
+use litesvm::{LiteSVM, types::TransactionMetadata};
 use magnus_router_client::instructions::SwapBuilder;
 use magnus_shared::{Dex, Route};
 use pmm_sim::PMMCfg;
 use secrecy::{ExposeSecret, SecretString};
+use serde::Serialize;
 use solana_client::rpc_client::RpcClient;
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_sdk::{
@@ -37,6 +40,7 @@ pub mod consts {
 
     pub const ROUTER: &str = "magnus-router";
     pub const SETUP_PATH: &str = "./setup.toml";
+    pub const DATASET_PATH: &str = "./dataset";
     pub const PROGRAMS_PATH: &str = "./cfg/programs";
     pub const ACCOUNTS_PATH: &str = "./cfg/accounts";
 
@@ -80,6 +84,23 @@ impl CliArgs {
 
     fn parse_nested_weights(s: &str) -> Result<Vec<Vec<u8>>, String> {
         serde_json::from_str(s).map_err(|e| format!("invalid format: {}", e))
+    }
+
+    fn parse_step(s: &str) -> Result<[f64; 3], String> {
+        let parts: Vec<f64> = s.split(',').map(|p| p.trim().parse::<f64>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
+
+        let parts: [f64; 3] =
+            parts.try_into().map_err(|v: Vec<f64>| format!("expected exactly 3 values (start,end,step), got {}", v.len()))?;
+
+        if parts[0] >= parts[1] {
+            return Err("start must be less than end".to_string());
+        }
+
+        if parts[2] <= 0.0 {
+            return Err("step must be positive".to_string());
+        }
+
+        Ok(parts)
     }
 
     fn default_pmm() -> Vec<Dex> {
@@ -131,8 +152,8 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
 
-        #[arg(long, env = "AMOUNT_IN", default_value_t = 1, help = "The amount of tokens to trade")]
-        amount_in: u64,
+        #[arg(long, env = "AMOUNT_IN", default_value_t = 1.0, help = "The amount of tokens to trade")]
+        amount_in: f64,
 
         #[arg(long, value_delimiter = ',', default_value = "humidifi,solfi-v2", help = "Comma-separated list of Prop AMMs")]
         pmms: Vec<Dex>,
@@ -162,10 +183,10 @@ pub enum Command {
             env = "AMOUNT_IN",
             value_delimiter = ',',
             num_args = 1..,
-            default_values_t = vec![1, 1],
+            default_values_t = vec![1.0, 1.0],
             help = "Comma-separated amounts for each route, e.g. --amount-in=3,50"
         )]
-        amount_in: Vec<u64>,
+        amount_in: Vec<f64>,
 
         #[arg(long, default_value = "[[humidifi,solfi-v2],[solfi-v2]]", help = "JSON nested routes, e.g. '[[dex1,dex2],[dex3]]'")]
         pmms: String,
@@ -203,12 +224,28 @@ pub enum Command {
         )]
         pmms: Vec<Dex>,
     },
+
+    #[command()]
+    Benchmark {
+        #[command(flatten)]
+        common: CommonArgs,
+
+        #[arg(long, env = "DATASET_PATH", default_value = consts::DATASET_PATH, help = "Directory to dump the benchmark CSVs into")]
+        dataset_path: String,
+
+        #[arg(long, env = "PROP_AMMS", value_delimiter = ',', default_value = "humidifi", help = "The Prop AMMs to benchmark")]
+        pmms: Vec<Dex>,
+
+        #[arg(long, env = "STEP", default_value = "1.0,100.0,1.0", value_parser = CliArgs::parse_step, help = "Comma-separated step parameters: start, end, step")]
+        step: [f64; 3],
+    },
 }
 
 impl Command {
     fn setup_path(&self) -> &str {
         match self {
             Command::FetchAccounts { setup_path, .. } => setup_path,
+            Command::Benchmark { common, .. } => &common.setup_path,
             Command::Single { common, .. } => &common.setup_path,
             Command::Multi { common, .. } => &common.setup_path,
         }
@@ -217,8 +254,9 @@ impl Command {
     fn name(&self) -> &'static str {
         match self {
             Command::FetchAccounts { .. } => "FetchAccounts",
-            Command::Single { .. } => "SingleSwap",
-            Command::Multi { .. } => "MultiSwap",
+            Command::Benchmark { .. } => "Benchmark",
+            Command::Single { .. } => "SingleInstructionSwaps",
+            Command::Multi { .. } => "MultiInstructionSwaps",
         }
     }
 }
@@ -277,6 +315,7 @@ impl Token {
 /// loading programs/accounts, setting up the wallet, sending transactions, etc.
 struct Environment<'a, P: Into<String> + Display + Clone + Debug> {
     svm: LiteSVM,
+    slot: Option<u64>,
     wallet: Keypair,
     mints: Option<&'a [(Pubkey, u8)]>,
     cfg: PMMCfg,
@@ -288,6 +327,7 @@ struct Environment<'a, P: Into<String> + Display + Clone + Debug> {
 impl<'a, P: Into<String> + Display + Clone + std::fmt::Debug> Debug for Environment<'a, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
+            .field("slot", &self.slot)
             .field("wallet_pubkey", &self.wallet.pubkey())
             .field("programs_path", &self.programs_path)
             .field("accounts_path", &self.accounts_path)
@@ -310,7 +350,7 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             }
         }
 
-        Ok(Environment { svm, wallet, programs_path, accounts_path, mints, cfg })
+        Ok(Environment { svm, slot: None, wallet, programs_path, accounts_path, mints, cfg })
     }
 
     fn setup_wallet(&mut self, mint: &Pubkey, mint_amount: u64, airdrop_amount: u64) -> eyre::Result<()> {
@@ -326,6 +366,22 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
         self.svm.set_account(ata, Misc::mk_ata(mint, &self.wallet.pubkey(), mint_amount))?;
 
         self.svm.airdrop(&self.wallet.pubkey(), airdrop_amount).expect("airdrop failed");
+
+        Ok(())
+    }
+
+    fn reset_wallet(&mut self, mint: &Pubkey, amount: u64) -> eyre::Result<()> {
+        let src_ata = self.wallet_ata(mint);
+        self.svm.set_account(src_ata, Misc::mk_ata(mint, &self.wallet.pubkey(), amount))?;
+
+        if let Some(mints) = self.mints {
+            for (m, _) in mints {
+                if m != mint {
+                    let dst_ata = self.wallet_ata(m);
+                    self.svm.set_account(dst_ata, Misc::mk_ata(m, &self.wallet.pubkey(), 0))?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -348,9 +404,9 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             let program_id = dex.program_id();
 
             self.svm.add_program_from_file(Pubkey::new_from_array(program_id.to_bytes()), format!("{}/{}.so", self.programs_path, dex))?;
-
-            info!("loaded program for {dex}");
         }
+
+        info!("loaded {pmms:?} programs");
 
         Ok(())
     }
@@ -397,8 +453,9 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
                 let max_slot = all_slots.iter().max().copied().unwrap();
                 warn!("slot mismatch across Prop AMMs: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
             }
+
             self.svm.warp_to_slot(first_slot);
-            info!("warped to slot {first_slot}");
+            self.slot = Some(first_slot);
         }
 
         Ok(())
@@ -412,11 +469,11 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
                 self.svm.set_account(pubkey, account)?;
                 debug!("loaded account {pubkey} for {dex}");
             }
-            info!("loaded accounts for {dex}");
         }
 
+        info!("loaded {pmms:?} accounts");
         self.svm.warp_to_slot(slot);
-        info!("warped to slot {slot}");
+        self.slot = Some(slot);
 
         Ok(())
     }
@@ -520,6 +577,23 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
     fn send_transaction(&mut self, tx: Transaction) -> litesvm::types::TransactionResult {
         self.svm.send_transaction(tx)
     }
+
+    fn get_event_amount_out(&self, metadata: &TransactionMetadata) -> u64 {
+        let amount_out: u64 = metadata
+            .logs
+            .iter()
+            .find_map(|log| {
+                if log.contains("SwapEvent") {
+                    // Log format: "Program log: SwapEvent { dex: Humidifi, amount_in: 1000000000, amount_out: 121518066 }"
+                    log.split("amount_out: ").nth(1)?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+                } else {
+                    None
+                }
+            })
+            .expect("couldn't find amount_out in logs");
+
+        amount_out
+    }
 }
 
 /// A helper struct to construct swap instructions with the required accounts
@@ -535,11 +609,27 @@ pub struct ConstructSwap<'a> {
     payer: Pubkey,
     sta: Pubkey,
     dta: Pubkey,
+    src_mint: Pubkey,
+    dst_mint: Pubkey,
 }
 
 impl<'a> ConstructSwap<'a> {
     fn instruction(&self) -> solana_sdk::instruction::Instruction {
         self.builder.instruction()
+    }
+
+    fn attach_pmm_accs(&mut self, pmm: &Dex) {
+        match pmm {
+            Dex::Humidifi => self.attach_humidifi_accs(),
+            Dex::SolfiV2 => self.attach_solfiv2_accs(),
+            Dex::Zerofi => self.attach_zerofi_accs(),
+            Dex::ObricV2 => self.attach_obric_v2_accs(),
+            Dex::Tessera => self.attach_tessera_accs(),
+            Dex::Goonfi => self.attach_goonfi_accs(),
+            _ => {
+                unimplemented!()
+            }
+        };
     }
 
     pub fn attach_solfiv2_accs(&mut self) {
@@ -596,7 +686,7 @@ impl<'a> ConstructSwap<'a> {
                 .add_remaining_account(AccountMeta::new(self.payer, true))
                 .add_remaining_account(AccountMeta::new(self.sta, false))
                 .add_remaining_account(AccountMeta::new(self.dta, false))
-                .add_remaining_account(AccountMeta::new(cfg.pair, false))
+                .add_remaining_account(AccountMeta::new(cfg.market, false))
                 .add_remaining_account(AccountMeta::new(cfg.vault_info_base, false))
                 .add_remaining_account(AccountMeta::new(cfg.vault_base, false))
                 .add_remaining_account(AccountMeta::new(cfg.vault_info_quote, false))
@@ -618,7 +708,7 @@ impl<'a> ConstructSwap<'a> {
                 .add_remaining_account(AccountMeta::new(self.payer, true))
                 .add_remaining_account(AccountMeta::new(self.sta, false))
                 .add_remaining_account(AccountMeta::new(self.dta, false))
-                .add_remaining_account(AccountMeta::new(cfg.trading_pair, false))
+                .add_remaining_account(AccountMeta::new(cfg.market, false))
                 .add_remaining_account(AccountMeta::new_readonly(cfg.second_ref_oracle, false))
                 .add_remaining_account(AccountMeta::new_readonly(cfg.third_ref_oracle, false))
                 .add_remaining_account(AccountMeta::new(cfg.reserve_x, false))
@@ -632,7 +722,7 @@ impl<'a> ConstructSwap<'a> {
         }
     }
 
-    pub fn attach_tessera_accs(&mut self, src_mint: &Pubkey, dst_mint: &Pubkey) {
+    pub fn attach_tessera_accs(&mut self) {
         if let Some(cfg) = &self.cfg.tessera {
             self.builder
                 .add_remaining_account(AccountMeta::new_readonly(
@@ -646,8 +736,8 @@ impl<'a> ConstructSwap<'a> {
                 .add_remaining_account(AccountMeta::new(cfg.market, false))
                 .add_remaining_account(AccountMeta::new(cfg.base_token_acc, false))
                 .add_remaining_account(AccountMeta::new(cfg.quote_token_acc, false))
-                .add_remaining_account(AccountMeta::new_readonly(*src_mint, false))
-                .add_remaining_account(AccountMeta::new_readonly(*dst_mint, false))
+                .add_remaining_account(AccountMeta::new_readonly(self.src_mint, false))
+                .add_remaining_account(AccountMeta::new_readonly(self.dst_mint, false))
                 .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
                 .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false))
                 .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false));
@@ -737,13 +827,12 @@ impl Misc {
         let unique_pmms: HashSet<_> = pmms.iter().collect();
         let mut results = vec![];
 
+        info!("fetching accounts for {pmms:?} at slot {slot}");
         for dex in unique_pmms {
             let Some(accounts) = cfg.get_accounts(dex) else {
                 warn!("skipping unsupported prop amms: {dex}");
                 continue;
             };
-
-            info!("fetching {} accounts for {dex} at slot {slot}", accounts.len());
 
             let fetched = client.get_multiple_accounts(&accounts)?;
             let mut dex_accounts = vec![];
@@ -762,6 +851,18 @@ impl Misc {
     }
 }
 
+#[derive(Serialize)]
+struct BenchmarkRecord {
+    slot: u64,
+    pmm: String,
+    market: String,
+    src_token: String,
+    dst_token: String,
+    amount_in: f64,
+    amount_out: f64,
+    compute_units: u64,
+}
+
 pub struct Run {
     args: CliArgs,
     cfg: PMMCfg,
@@ -775,6 +876,7 @@ impl Run {
     fn run(&self) -> eyre::Result<()> {
         match &self.args.command {
             Command::FetchAccounts { .. } => self.fetch_accounts(),
+            Command::Benchmark { .. } => self.benchmark(),
             Command::Single { .. } | Command::Multi { .. } => self.simulate(),
         }
     }
@@ -794,6 +896,113 @@ impl Run {
         }
 
         info!("done fetching accounts at slot {slot}");
+        Ok(())
+    }
+
+    fn benchmark(&self) -> eyre::Result<()> {
+        let Command::Benchmark { common, dataset_path, pmms, step } = &self.args.command else { unreachable!() };
+
+        let rpc_client = RpcClient::new(common.http_url.expose_secret().to_string());
+        let (src_mint, src_dec, src_name) = (common.src_token.get_addr(), common.src_token.get_decimals(), common.src_token.to_string());
+        let (dst_mint, dst_dec, dst_name) = (common.dst_token.get_addr(), common.dst_token.get_decimals(), common.dst_token.to_string());
+        let mints = vec![(src_mint, src_dec), (dst_mint, dst_dec)];
+
+        let norm_step = [
+            (step[0] * 10f64.powi(src_dec as i32)) as u64,
+            (step[1] * 10f64.powi(src_dec as i32)) as u64,
+            (step[2] * 10f64.powi(src_dec as i32)) as u64,
+        ];
+
+        let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(&mints), self.cfg.clone())?;
+        info!(?env);
+
+        env.load_programs(pmms)?;
+        env.load_accounts(pmms, common.jit_accounts, Some(&rpc_client))?;
+        env.setup_wallet(&src_mint, norm_step[1], 10_000_000_000)?;
+
+        let slot = env.slot.unwrap_or_default();
+        let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
+
+        let all_original_accounts: Vec<(Pubkey, Account)> = pmms
+            .iter()
+            .flat_map(|pmm| self.cfg.get_accounts(pmm).unwrap_or_default())
+            .filter_map(|pubkey| env.svm.get_account(&pubkey).map(|acc| (pubkey, acc)))
+            .collect();
+
+        let time = Local::now().format("%Y%m%d-%H%M%S");
+        for pmm in pmms {
+            let market = self.cfg.get_market(pmm).unwrap_or_else(|| panic!("{} not configured", pmm));
+
+            let mut r = vec![];
+            for amount_in in (norm_step[0]..=norm_step[1]).step_by(norm_step[2] as usize) {
+                env.reset_wallet(&src_mint, amount_in)?;
+
+                // Reset ALL PMM accounts to original state
+                for (pubkey, account) in &all_original_accounts {
+                    env.svm.set_account(*pubkey, account.clone())?;
+                }
+
+                let route: Vec<magnus_router_client::types::Route> = vec![Route { dexes: vec![*pmm], weights: vec![100] }.into()];
+                let mut swap_builder = SwapBuilder::new();
+                let swap = swap_builder
+                    .payer(env.wallet_pubkey())
+                    .source_token_account(src_ata)
+                    .destination_token_account(dst_ata)
+                    .source_mint(src_mint)
+                    .destination_mint(dst_mint)
+                    .amount_in(amount_in)
+                    .expect_amount_out(1)
+                    .min_return(1)
+                    .amounts(vec![amount_in])
+                    .routes(vec![route])
+                    .order_id(SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+
+                let mut construct = ConstructSwap {
+                    cfg: self.cfg.clone(),
+                    builder: swap,
+                    payer: env.wallet_pubkey(),
+                    sta: src_ata,
+                    dta: dst_ata,
+                    src_mint,
+                    dst_mint,
+                };
+
+                construct.attach_pmm_accs(pmm);
+                let swap_ix = construct.instruction();
+
+                let tx = Transaction::new_signed_with_payer(&[swap_ix], Some(&env.wallet_pubkey()), &[&env.wallet], env.latest_blockhash());
+                let res = match env.send_transaction(tx) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        warn!("transaction failed for {} with amount_in {}", pmm, amount_in);
+                        debug!(?e);
+                        continue;
+                    }
+                };
+                let amount_out = env.get_event_amount_out(&res);
+
+                r.push(BenchmarkRecord {
+                    slot,
+                    pmm: format!("{}", pmm),
+                    market: market.to_string(),
+                    src_token: src_name.clone(),
+                    dst_token: dst_name.clone(),
+                    amount_in: amount_in as f64 / 10f64.powi(src_dec as i32),
+                    amount_out: amount_out as f64 / 10f64.powi(dst_dec as i32),
+                    compute_units: res.compute_units_consumed,
+                });
+            }
+
+            let filename = format!("{}/{}_{}_{}_{}.csv", dataset_path, slot, pmm, market, time);
+            let mut wtr = Writer::from_path(&filename)?;
+            for record in &r {
+                wtr.serialize(record)?;
+            }
+            wtr.flush()?;
+
+            info!("Saved {} records to {} for {}", r.len(), filename, pmm);
+        }
+
         Ok(())
     }
 
@@ -822,13 +1031,16 @@ impl Run {
         let (dst_mint, dst_dec, dst_name) = (common.dst_token.get_addr(), common.dst_token.get_decimals(), common.dst_token.to_string());
         let mints = vec![(src_mint, src_dec), (dst_mint, dst_dec)];
 
-        let mut env = Environment::new(consts::PROGRAMS_PATH, consts::ACCOUNTS_PATH, Some(&mints), self.cfg.clone())?;
+        let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(&mints), self.cfg.clone())?;
         env.load_programs(&flat_pmms)?;
         env.load_accounts(&flat_pmms, common.jit_accounts, Some(&rpc_client))?;
 
+        let norm_amount_in: Vec<u64> = amount_in.iter().map(|amount| amount * 10f64.powi(src_dec as i32)).map(|a| a as u64).collect();
+        let norm_amount_in_sum: u64 = norm_amount_in.iter().sum();
+
         // - mint only the source token's desired amount (i.e the amount we're going to swap)
         // - airdrop some SOL to cover fees
-        env.setup_wallet(&src_mint, amount_in.iter().sum::<u64>() * 10u64.pow(src_dec as u32), 10_000_000_000)?;
+        env.setup_wallet(&src_mint, norm_amount_in_sum, 10_000_000_000)?;
         info!(?env);
 
         let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
@@ -841,10 +1053,9 @@ impl Run {
         let routes: Vec<Vec<magnus_router_client::types::Route>> = pmms
             .iter()
             .zip(weights.iter())
-            .map(|(dex_group, weight_group)| vec![Route { dexes: dex_group.clone(), weights: weight_group.clone() }.into()])
+            .map(|(dex_grp, weight_group)| vec![Route { dexes: dex_grp.clone(), weights: weight_group.clone() }.into()])
             .collect();
 
-        let norm_amount_in: Vec<u64> = amount_in.iter().map(|amount| amount * 10u64.pow(src_dec as u32)).collect();
         info!("swapping {:?} {} via routes: {:?}", norm_amount_in, src_name, routes);
 
         let mut swap_builder = SwapBuilder::new();
@@ -854,28 +1065,26 @@ impl Run {
             .destination_token_account(dst_ata)
             .source_mint(src_mint)
             .destination_mint(dst_mint)
-            .amount_in(norm_amount_in.iter().sum())
+            .amount_in(norm_amount_in_sum)
             .expect_amount_out(1)
             .min_return(1)
             .amounts(norm_amount_in)
             .routes(routes)
             .order_id(SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
 
-        let mut construct = ConstructSwap { cfg: self.cfg.clone(), builder: swap, payer: env.wallet_pubkey(), sta: src_ata, dta: dst_ata };
+        let mut construct = ConstructSwap {
+            cfg: self.cfg.clone(),
+            builder: swap,
+            payer: env.wallet_pubkey(),
+            sta: src_ata,
+            dta: dst_ata,
+            src_mint,
+            dst_mint,
+        };
 
         // attach the necessary accounts for each of the implemented Prop AMMs
         flat_pmms.iter().for_each(|pmm| {
-            match pmm {
-                Dex::Humidifi => construct.attach_humidifi_accs(),
-                Dex::SolfiV2 => construct.attach_solfiv2_accs(),
-                Dex::Zerofi => construct.attach_zerofi_accs(),
-                Dex::ObricV2 => construct.attach_obric_v2_accs(),
-                Dex::Tessera => construct.attach_tessera_accs(&src_mint, &dst_mint),
-                Dex::Goonfi => construct.attach_goonfi_accs(),
-                _ => {
-                    unimplemented!()
-                }
-            };
+            construct.attach_pmm_accs(pmm);
         });
 
         let swap_ix = construct.instruction();
@@ -883,12 +1092,14 @@ impl Run {
 
         let tx = Transaction::new_signed_with_payer(&[swap_ix], Some(&env.wallet_pubkey()), &[&env.wallet], env.latest_blockhash());
         let res = env.send_transaction(tx).expect("failed to exec tx");
+        let amount_out = env.get_event_amount_out(&res);
 
         let (src_after, dst_after) = (
             env.token_balance(&src_mint) as f64 / 10_f64.powi(src_dec as i32),
             env.token_balance(&dst_mint) as f64 / 10_f64.powi(dst_dec as i32),
         );
-        info!("|SWAP EXECUTED| compute units consumed: {}", res.compute_units_consumed);
+
+        info!("|SWAP EXECUTED| compute units consumed: {:?} | amount_out: {}", res.compute_units_consumed, amount_out);
         info!("after: {} = {:.6} | {} = {:.6} | ", src_name, src_after, dst_name, dst_after);
         info!("diff: {} spent = {:.6} | {} received = {:.6}", src_name, src_before - src_after, dst_name, dst_after - dst_before);
 
