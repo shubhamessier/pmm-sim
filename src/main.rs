@@ -40,7 +40,7 @@ pub mod consts {
 
     pub const ROUTER: &str = "magnus-router";
     pub const SETUP_PATH: &str = "./setup.toml";
-    pub const DATASET_PATH: &str = "./dataset";
+    pub const DATASETS_PATH: &str = "./dataset";
     pub const PROGRAMS_PATH: &str = "./cfg/programs";
     pub const ACCOUNTS_PATH: &str = "./cfg/accounts";
 
@@ -141,11 +141,11 @@ pub struct CommonArgs {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     #[command(
-        about = "Run a single swap instruction across one or more Prop AMMs with specified weights.",
+        about = "Run a single swap route across one or more Prop AMMs with specified weights.",
         after_help = "Examples:
   pmm-sim single --pmms=humidifi --weights=100 --amount-in=100 --src-token=WSOL --dst-token=USDC
   pmm-sim single --pmms=humidifi,solfi-v2 --weights=50,50 --amount-in=150000 --src-token=USDC --dst-token=WSOL
-  pmm-sim single --amount-in=10000 --pmms=solfi-v2 --weights=100
+  pmm-sim single --amount-in=10000 --pmms=solfi-v2,tessera --weights=30,70
   pmm-sim single --amount-in=10000 --pmms=obric-v2 --weights=100 --src-token=USDC --dst-token=USDT"
     )]
     Single {
@@ -163,7 +163,8 @@ pub enum Command {
     },
 
     #[command(
-        about = "Execute multiple swap instructions across nested Prop AMM routes. Each inner list represents a single transaction step.",
+        about = "Execute multiple swap routes across nested Prop AMM routes. Each inner list represents a single route, each route \
+                 possibly going through multiple Prop AMMs.",
         after_help = "Examples:
       # Single step with one DEX
       pmm-sim multi --pmms='[[humidifi]]' --weights='[[100]]'
@@ -203,7 +204,8 @@ pub enum Command {
         about = "Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).",
         after_help = "Examples:
   pmm-sim fetch-accounts --pmms=humidifi
-  pmm-sim fetch-accounts --pmms=humidifi,obric-v2,zerofi,solfi-v2pmm-sim \
+  pmm-sim fetch-accounts --pmms=humidifi,obric-v2,zerofi,solfi-v2
+  pmm-sim \
                       fetch-accounts --pmms=humidifi --http-url=https://my-rpc.com"
     )]
     FetchAccounts {
@@ -225,13 +227,25 @@ pub enum Command {
         pmms: Vec<Dex>,
     },
 
-    #[command()]
+    #[command(
+        about = "Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and \
+                 step size",
+        after_help = "Examples:
+    # Benchmark Humidifi swaps (WSOL->USDC) with the current AMM state, stepping from 1 to 100 with a step size of 1. The resulting CSV
+    # will be saved in the ./dataset directory
+    pmm-sim benchmark --pmms=humidifi --step=1.0,100.0,1.0
+
+    # Benchmark SolfiV2 and Tessera swaps (USDC->USDT) with the current AMM state, stepping from 10 to 1000 with a step size of 5. The
+    # resulting CSVs will be saved in the ./dataset directory
+    pmm-sim benchmark --pmms=solfi-v2,tessera --src-token=USDC --dst-token=USDT --step=10.0,1000.0,5.0
+        "
+    )]
     Benchmark {
         #[command(flatten)]
         common: CommonArgs,
 
-        #[arg(long, env = "DATASET_PATH", default_value = consts::DATASET_PATH, help = "Directory to dump the benchmark CSVs into")]
-        dataset_path: String,
+        #[arg(long, env = "DATASETS_PATH", default_value = consts::DATASETS_PATH, help = "Directory to dump the benchmark CSVs into")]
+        datasets_path: String,
 
         #[arg(long, env = "PROP_AMMS", value_delimiter = ',', default_value = "humidifi", help = "The Prop AMMs to benchmark")]
         pmms: Vec<Dex>,
@@ -255,8 +269,8 @@ impl Command {
         match self {
             Command::FetchAccounts { .. } => "FetchAccounts",
             Command::Benchmark { .. } => "Benchmark",
-            Command::Single { .. } => "SingleInstructionSwaps",
-            Command::Multi { .. } => "MultiInstructionSwaps",
+            Command::Single { .. } => "SingleRouteSwaps",
+            Command::Multi { .. } => "MultiRouteSwaps",
         }
     }
 }
@@ -900,7 +914,7 @@ impl Run {
     }
 
     fn benchmark(&self) -> eyre::Result<()> {
-        let Command::Benchmark { common, dataset_path, pmms, step } = &self.args.command else { unreachable!() };
+        let Command::Benchmark { common, datasets_path, pmms, step } = &self.args.command else { unreachable!() };
 
         let rpc_client = RpcClient::new(common.http_url.expose_secret().to_string());
         let (src_mint, src_dec, src_name) = (common.src_token.get_addr(), common.src_token.get_decimals(), common.src_token.to_string());
@@ -993,7 +1007,7 @@ impl Run {
                 });
             }
 
-            let filename = format!("{}/{}_{}_{}_{}.csv", dataset_path, slot, pmm, market, time);
+            let filename = format!("{}/{}_{}_{}_{}.csv", datasets_path, slot, pmm, market, time);
             let mut wtr = Writer::from_path(&filename)?;
             for record in &r {
                 wtr.serialize(record)?;
