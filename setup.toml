@@ -4,6 +4,22 @@ market = "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH"
 base_token_acc = "C3FzbX9n1YD2dow2dCmEv5uNyyf22Gb3TLAEqGBhw5fY"
 quote_token_acc = "3RWFAQBRkNGq7CMGcTLK3kXDgFTe9jgMeFYqk8nHwcWh"
 
+## other humidifi markets
+
+# https://solscan.io/account/DB3sUCP2H4icbeKmK6yb6nUxU5ogbcRHtGuq7W2RoRwW
+# market = "DB3sUCP2H4icbeKmK6yb6nUxU5ogbcRHtGuq7W2RoRwW"
+# base_token_acc = "8BrVfsvzb1DZqCactbYWoKSv24AfsLBuXJqzpzYCwznF"
+# quote_token_acc = "HsQcHFFNUVTp3MWrXYbuZchBNd4Pwk8636bKzLvpfYNR"
+
+# https://solscan.io/account/6n9VhCwQ7EwK6NqFDjnHPzEk6wZdRBTfh43RFgHQWHuQ
+# market = "6n9VhCwQ7EwK6NqFDjnHPzEk6wZdRBTfh43RFgHQWHuQ"
+# base_token_acc = "C3FzbX9n1YD2dow2dCmEv5uNyyf22Gb3TLAEqGBhw5fY"
+# quote_token_acc = "3RWFAQBRkNGq7CMGcTLK3kXDgFTe9jgMeFYqk8nHwcWh"
+
+# market = "AvGeFw71N5sNfV97mZ1uNrHg4yfufRicCJUrS9j2ehTX"
+# base_token_acc = "ECEPWwZJ1U1Vjsj1X5sUbZYETKMSCjYHuoTMVitCn64t"
+# quote_token_acc = "FBWtVVvzsRuAAzVX8ua1hden9KmgPrC2rFijuwEn1ngJ"
+
 # https://solscan.io/account/FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n
 [tessera]
 market = "FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n"
@@ -34,7 +50,7 @@ vault_base = "ERP5RTV6cWmoGrv7r9W2V5pbgDFSepc4j97qNnx1Jris"
 vault_info_quote = "Ef7zPqj4NuZHwaTczUTY9oRbxXrfZseUcKcqPaidCZ5W"
 vault_quote = "7wYJVD8iXmMQjND1fwi1hPr68QwruVVtirbotyJZXaVH"
 
-# ObricV2's USDT-USDC Market (the only currently active one
+# ObricV2's USDT-USDC Market (the only active one)
 # https://solscan.io/account/BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG
 [obric-v2]
 market = "BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG"
