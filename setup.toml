@@ -1,8 +1,8 @@
-# https://solscan.io/account/DB3sUCP2H4icbeKmK6yb6nUxU5ogbcRHtGuq7W2RoRwW
+# https://solscan.io/account/FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH
 [humidifi]
-market = "DB3sUCP2H4icbeKmK6yb6nUxU5ogbcRHtGuq7W2RoRwW"
-base_token_acc = "8BrVfsvzb1DZqCactbYWoKSv24AfsLBuXJqzpzYCwznF"
-quote_token_acc = "HsQcHFFNUVTp3MWrXYbuZchBNd4Pwk8636bKzLvpfYNR"
+market = "FksffEqnBRixYGR791Qw2MgdU7zNCpHVFYBL4Fa4qVuH"
+base_token_acc = "C3FzbX9n1YD2dow2dCmEv5uNyyf22Gb3TLAEqGBhw5fY"
+quote_token_acc = "3RWFAQBRkNGq7CMGcTLK3kXDgFTe9jgMeFYqk8nHwcWh"
 
 # https://solscan.io/account/FLckHLGMJy5gEoXWwcE68Nprde1D4araK4TGLw4pQq2n
 [tessera]
@@ -28,7 +28,7 @@ oracle = "2ny7eGyZCoeEVTkNLf5HcnJFBKkyA4p4gcrtb3b8y8ou"
 
 # https://solscan.io/account/2h9hhu3gxY9kCdXEwdTHV8yPAMYVoHgKopRyG1HbDwfi
 [zerofi]
-pair = "2h9hhu3gxY9kCdXEwdTHV8yPAMYVoHgKopRyG1HbDwfi"
+market = "2h9hhu3gxY9kCdXEwdTHV8yPAMYVoHgKopRyG1HbDwfi"
 vault_info_base = "7RHJ2WfexqUxy7SXfbNZRZDgZi3D9jtMAQp9VhfzpU8T"
 vault_base = "ERP5RTV6cWmoGrv7r9W2V5pbgDFSepc4j97qNnx1Jris"
 vault_info_quote = "Ef7zPqj4NuZHwaTczUTY9oRbxXrfZseUcKcqPaidCZ5W"
@@ -37,7 +37,7 @@ vault_quote = "7wYJVD8iXmMQjND1fwi1hPr68QwruVVtirbotyJZXaVH"
 # ObricV2's USDT-USDC Market (the only currently active one
 # https://solscan.io/account/BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG
 [obric-v2]
-trading_pair = "BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG"
+market = "BWBHrYqfcjAh5dSiRwzPnY4656cApXVXmkeDmAfwBKQG"
 second_ref_oracle = "GZsNmWKbqhMYtdSkkvMdEyQF9k5mLmP7tTKYWZjcHVPE"
 third_ref_oracle = "6YawcNeZ74tRyCv4UfGydYMr7eho7vbUR6ScVffxKAb3"
 reserve_x = "C3tPQ8TRcHybnPpR8KMASUVD3PukQRRHEsLwxorJMhgm"

@@ -60,6 +60,15 @@ macro_rules! define_dex_configs {
                 }
             }
 
+            pub fn get_market(&self, dex: &Dex) -> Option<Pubkey> {
+                match dex {
+                    $(
+                        Dex::$dex_variant => self.$cfg_field.as_ref().map(|c| c.market),
+                    )*
+                    _ => None,
+                }
+            }
+
             pub fn get_config<T: DexCfg>(&self) -> Option<&T> {
                 T::from_cfg(self)
             }
@@ -106,14 +115,14 @@ define_dex_configs! {
         oracle,
     },
     Zerofi => ZerofiCfg : zerofi ("zerofi") {
-        pair,
+        market,
         vault_info_base,
         vault_base,
         vault_info_quote,
         vault_quote,
     },
     ObricV2 => ObricV2Cfg : obric_v2 ("obric-v2") {
-        trading_pair,
+        market,
         second_ref_oracle,
         third_ref_oracle,
         reserve_x,
