@@ -166,14 +166,14 @@ pub enum Command {
         about = "Execute multiple swap routes across nested Prop AMM routes. Each inner list represents a single route, each route \
                  possibly going through multiple Prop AMMs.",
         after_help = "Examples:
-      # Single step with one DEX
-      pmm-sim multi --pmms='[[humidifi]]' --weights='[[100]]'
+  # Single swap with one Prop AMM
+  pmm-sim multi --pmms='[[humidifi]]' --weights='[[100]]'
 
-      # Two sequential swaps: (Humidifi + Obric) followed by Zerofi
-      pmm-sim multi --pmms='[[humidifi,zerofi],[solfi-v2]]' --weights='[[50,50],[100]]'
+  # Two sequential swaps: (Humidifi + Obric) followed by Zerofi
+  pmm-sim multi --pmms='[[humidifi,zerofi],[solfi-v2]]' --weights='[[50,50],[100]]'
 
-      # Complex three-step route
-      pmm-sim multi --amount-in 10 --pmms='[[humidifi],[solfi-v2],[zerofi]]' --weights='[[100],[60,40],[100]]'"
+  # Complex three-step nested route
+  pmm-sim multi --amount-in=10 --pmms='[[humidifi,tessera],[solfi-v2],[goonfi,humidifi]]' --weights='[[100],[60,40],[95,5]]'"
     )]
     Multi {
         #[command(flatten)]
@@ -231,13 +231,13 @@ pub enum Command {
         about = "Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and \
                  step size",
         after_help = "Examples:
-    # Benchmark Humidifi swaps (WSOL->USDC) with the current AMM state, stepping from 1 to 100 with a step size of 1. The resulting CSV
-    # will be saved in the ./dataset directory
-    pmm-sim benchmark --pmms=humidifi --step=1.0,100.0,1.0
+  # Benchmark Humidifi swaps (WSOL->USDC) with the current AMM state, stepping from 1 to 100 with a step size of 1. The resulting CSV
+  # will be saved in the ./dataset directory
+  pmm-sim benchmark --pmms=humidifi --step=1.0,100.0,1.0
 
-    # Benchmark SolfiV2 and Tessera swaps (USDC->USDT) with the current AMM state, stepping from 10 to 1000 with a step size of 5. The
-    # resulting CSVs will be saved in the ./dataset directory
-    pmm-sim benchmark --pmms=solfi-v2,tessera --src-token=USDC --dst-token=USDT --step=10.0,1000.0,5.0
+  # Benchmark SolfiV2 and Tessera swaps (USDC->USDT) with the current AMM state, stepping from 10 to 1000 with a step size of 5. The
+  # resulting CSVs will be saved in the ./dataset directory
+  pmm-sim benchmark --pmms=solfi-v2,tessera --src-token=USDC --dst-token=USDT --step=10.0,1000.0,5.0
         "
     )]
     Benchmark {

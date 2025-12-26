@@ -11,14 +11,14 @@ Supported Prop AMMs:
 - [x] TesseraV
 - [x] Goonfi
 
-The swaps can be done either with the local static accounts that can be found at [cfg/accounts](./cfg/accounts) or with the current live accounts (by fetching them on-the-go). By default all swaps are done with live accounts.
+The swaps can be done either with the local static accounts that can be found at [cfg/accounts](./cfg/accounts) or with the current live accounts (by fetching them on-the-go). By default all swaps & benchmark simulations are done with live accounts.
 
 Possible modes of execution include:
 
-- single - Run a single swap route across one or more Prop AMMs with specified weights.
-- multi - Execute multiple swap routes across nested Prop AMM routes. Each inner list represents a single route, each route possibly going through multiple Prop AMMs.
-- benchmark - Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage)
-- fetch-accounts - Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size. Benchmark data can be visualised with [plot.py](./scripts/plot.py).
+- **single** - Run a single swap route across one or more Prop AMMs with specified weights.
+- **multi** - Execute swaps across nested Prop AMM routes. Each inner list represents a single route, each route possibly going through multiple Prop AMMs.
+- **benchmark** - Fetch accounts for specified PMMs via RPC and save them locally (presumably for later usage).
+- **fetch-accounts** - Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size. Benchmark data can be visualised with [plot.py](./scripts/plot.py).
 
 Accounts are by default loaded (saved) from (at) [cfg/accounts](./cfg/accounts). Tweaking the source/destination is possible via `--accounts-path` or `ACCOUNTS_PATH` env variable.
 
