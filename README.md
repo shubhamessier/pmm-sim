@@ -17,8 +17,30 @@ Possible modes of execution include:
 
 - **single** - Run a single swap route across one or more Prop AMMs with specified weights.
 - **multi** - Execute swaps across nested Prop AMM routes. Each inner list represents a single route, each route possibly going through multiple Prop AMMs.
-- **benchmark** - Fetch accounts for specified PMMs via RPC and save them locally (presumably for later usage).
-- **fetch-accounts** - Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size. Benchmark data can be visualised with [plot.py](./scripts/plot.py).
+- **fetch-accounts** - Fetch accounts for specified PMMs via RPC and save them locally (presumably for later usage).
+- **benchmark** - Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size. Benchmark data can be visualised with [plot.py](./scripts/plot.py).
+
+```
+$ pmm-sim --help
+
+Simulation environment for Solana Proprietary AMM swaps.
+Simulate Swaps across *any* of the major Solana Prop AMMs.
+
+Usage: pmm-sim <COMMAND>
+
+Commands:
+  single          Run a single swap instruction across one or more Prop AMMs with specified weights.
+  multi           Execute multiple swap instructions across nested Prop AMM routes. Each inner list represents a single instruction, each instruction possibly going through multiple Prop AMMs.
+  fetch-accounts  Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).
+  benchmark       Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size
+  help            Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+Check out the CLI subcommands help for additional clues (i.e `pmm-sim single --help`)
 
 Accounts are by default loaded (saved) from (at) [cfg/accounts](./cfg/accounts). Tweaking the source/destination is possible via `--accounts-path` or `ACCOUNTS_PATH` env variable.
 
