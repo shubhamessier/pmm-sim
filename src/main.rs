@@ -324,7 +324,7 @@ impl Token {
 }
 
 /// The Simulation Environment;
-/// Ensures proper setup of the LiteSVM, wallet, programs, and accounts.
+/// Ensures proper setup of LiteSVM, wallet, programs, and accounts.
 /// Also provides utility functions for common operations, like
 /// loading programs/accounts, setting up the wallet, sending transactions, etc.
 struct Environment<'a, P: Into<String> + Display + Clone + Debug> {
