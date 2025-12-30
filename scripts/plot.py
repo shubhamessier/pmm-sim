@@ -1,3 +1,4 @@
+"""Plot the exchange rate and compute units for Solana Prop AMM markets."""
 #!/usr/bin/env python3
 
 import polars as pl
@@ -57,12 +58,12 @@ if __name__ == "__main__":
 
     for f in args.files:
         if not os.path.exists(f):
-            print(f"Error: File not found: {f}")
+            print(f"File not found: {f}")
             exit(1)
 
     if args.type == "all":
-        plot_exchange_rate(args.files, block=False)
-        plot_compute_units(args.files, block=True)
+        plot_compute_units(args.files, block=False)
+        plot_exchange_rate(args.files, block=True)
     else:
         if args.type == "rate":
             plot_exchange_rate(args.files)

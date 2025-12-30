@@ -64,18 +64,32 @@ cargo r -- single --amount-in=10000 --pmms=obric-v2 --weights=100 --src-token=US
 cargo r -- multi --pmms="[[humidifi,solfi-v2],[humidifi]]" --weights "[[92, 8],[100]]" --amount-in=100,3
 ```
 
+##### Execute two routes, the first swapping 150,000 USDC for WSOL using Humidifi and SolfiV2 (split 25%/75%), the second swapping 1000 USDC for WSOL using Goonfi. Uses the static accounts (i.e the accounts found at [./cfg/accounts](./cfg/accounts)).
+
+```
+RUST_LOG=debug cargo r -- multi --pmms="[[humidifi,solfi-v2],[goonfi]]" --weights="[[25,75],[100]]" --amount-in=150000,1000 --src-token=USDC --dst-token=WSOL --jit-accounts=true
+```
+
 ### Benchmark swaps
 
-##### Execute swaps on Tessera, from 1 to 4000 WSOL to USDC, in increments of 1 WSOL, and save the results at [./dataset](./dataset).
+##### Benchmark swaps on Humidifi, from 1 to 4000 WSOL to USDC, in increments of 1 WSOL, and save the results at [./datasets](./datasets).
 
 ```
-cargo r -- benchmark --step=1,4000,1 --pmms=tessera --src-token=wsol --dst-token=usdc
+cargo r -- benchmark --step=1,4000,1 --pmms=humidifi --src-token=wsol --dst-token=usdc
 ```
 
-##### Execute swaps on Humidifi, Tessera, SolfiV2 and Goonfi, from 10K to 100K USDC to WSOL, in increments of 2 USDC, and save the results at [./dataset](./dataset).
+##### Benchmark swaps (USDC->WSOL) on Humidifi, Tessera, SolfiV2 and Goonfi, from 10K to 100K USDC, in increments of 100 USDC, and save the results at [./datasets](./datasets).
 
 ```
 cargo r -- benchmark --step=10000,100000,100 --pmms=humidifi,tessera,solfi-v2,goonfi --src-token=usdc --dst-token=wsol
+```
+
+Once generated, the results can be plotted through [./scripts/plot.py](./scripts/plot.py), i.e:
+
+##### Plots all the local datasets for slot `389141713`.
+
+```
+./scripts/plot.py ./dataset/389141713*
 ```
 
 ### Fetch live accounts

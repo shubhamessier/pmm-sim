@@ -1,17 +1,18 @@
+//! Simulation & Benchmark environment for Solana's Proprietary AMMs.
+//!
+//! Simulate and/or Benchmark swaps across *any* of the major Solana Proprietary AMMs, locally, using LiteSVM.
 #![doc = include_str!("../README.md")]
 #![allow(clippy::type_complexity, clippy::result_large_err)]
 #![deny(unused)]
-//!
-//! Simulation environment for Solana's Proprietary AMMs.
-//!
-//! Simulate and/or Benchmark swaps across *any* of the major Solana Proprietary AMMs, locally, using LiteSVM.
+
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Display},
     fs::{self, File},
     io::Write,
     path::Path,
     str::FromStr,
+    thread,
     time::SystemTime,
 };
 
@@ -19,12 +20,12 @@ use base64::{Engine, engine::general_purpose};
 use chrono::Local;
 use clap::{Args, Parser, Subcommand};
 use csv::Writer;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use litesvm::{LiteSVM, types::TransactionMetadata};
 use magnus_router_client::instructions::SwapBuilder;
 use magnus_shared::{Dex, Route};
-use pmm_sim::PMMCfg;
 use secrecy::{ExposeSecret, SecretString};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use solana_client::rpc_client::RpcClient;
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_sdk::{
@@ -35,12 +36,14 @@ use spl_associated_token_account::get_associated_token_address;
 use tracing::{debug, info, warn};
 use tracing_subscriber::{EnvFilter, fmt::time::UtcTime};
 
+/// Constants used throughout the simulation environment.
+/// Holds the CFG file paths and swappable token accounts;
 pub mod consts {
     use solana_sdk::{pubkey, pubkey::Pubkey};
 
     pub const ROUTER: &str = "magnus-router";
     pub const SETUP_PATH: &str = "./setup.toml";
-    pub const DATASETS_PATH: &str = "./dataset";
+    pub const DATASETS_PATH: &str = "./datasets";
     pub const PROGRAMS_PATH: &str = "./cfg/programs";
     pub const ACCOUNTS_PATH: &str = "./cfg/accounts";
 
@@ -52,6 +55,134 @@ pub mod consts {
 
     pub const USDT: Pubkey = pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
     pub const USDT_DECIMALS: u8 = 6;
+
+    pub const PROGRESS_TEMPLATE: &str = "{prefix:>12.bold} [{bar:40.cyan/blue}] {pos:>6}/{len:<6} ({percent}%)";
+}
+
+/// Macro to generate dex configuration structs and their associated functions.
+/// All PMM markets have extremely similar, yet distinct, cfgs.
+///
+/// Necessary to avoid tedious duplicating.
+macro_rules! define_dex_configs {
+    (
+        $(
+            $dex_variant:ident => $struct_name:ident : $cfg_field:ident ($toml_key:literal) {
+                $( $field:ident ),* $(,)?
+            }
+        ),* $(,)?
+    ) => {
+        $(
+            #[derive(Debug, Deserialize, Clone)]
+            pub struct $struct_name {
+                $(
+                    #[serde(deserialize_with = "Misc::deserialize_pubkey")]
+                    pub $field: Pubkey,
+                )*
+            }
+
+            impl $struct_name {
+                pub fn accounts(&self) -> Vec<Pubkey> {
+                    vec![ $( self.$field ),* ]
+                }
+            }
+        )*
+
+        #[derive(Clone, Debug, Deserialize, Default)]
+        pub struct PMMCfg {
+            $(
+                #[serde(rename = $toml_key, default)]
+                pub $cfg_field: Option<$struct_name>,
+            )*
+        }
+
+        impl PMMCfg {
+            pub fn load(path: &str) -> eyre::Result<Self> {
+                let contents = fs::read_to_string(path)?;
+                let cfg: PMMCfg = toml::from_str(&contents)?;
+                Ok(cfg)
+            }
+
+            pub fn get_accounts(&self, dex: &Dex) -> Option<Vec<Pubkey>> {
+                match dex {
+                    $(
+                        Dex::$dex_variant => self.$cfg_field.as_ref().map(|c| c.accounts()),
+                    )*
+                    _ => None,
+                }
+            }
+
+            pub fn get_market(&self, dex: &Dex) -> Option<Pubkey> {
+                match dex {
+                    $(
+                        Dex::$dex_variant => self.$cfg_field.as_ref().map(|c| c.market),
+                    )*
+                    _ => None,
+                }
+            }
+
+            pub fn get_config<T: DexCfg>(&self) -> Option<&T> {
+                T::from_cfg(self)
+            }
+        }
+
+        pub trait DexCfg: Sized {
+            fn from_cfg(cfg: &PMMCfg) -> Option<&Self>;
+        }
+
+        $(
+            impl DexCfg for $struct_name {
+                fn from_cfg(cfg: &PMMCfg) -> Option<&Self> {
+                    cfg.$cfg_field.as_ref()
+                }
+            }
+        )*
+    };
+}
+
+// All DEX Cfgs
+// Reference the cfg file — `setup.toml`
+define_dex_configs! {
+    Humidifi => HumidifiCfg : humidifi ("humidifi") {
+        market,
+        base_token_acc,
+        quote_token_acc,
+    },
+    Tessera => TesseraCfg : tessera ("tessera") {
+        market,
+        base_token_acc,
+        quote_token_acc,
+        global_state,
+    },
+    Goonfi => GoonfiCfg : goonfi ("goonfi") {
+        market,
+        base_token_acc,
+        quote_token_acc,
+        blacklist,
+    },
+    SolfiV2 => SolfiV2Cfg : solfi_v2 ("solfi-v2") {
+        market,
+        base_token_acc,
+        quote_token_acc,
+        cfg,
+        oracle,
+    },
+    Zerofi => ZerofiCfg : zerofi ("zerofi") {
+        market,
+        vault_info_base,
+        vault_base,
+        vault_info_quote,
+        vault_quote,
+    },
+    ObricV2 => ObricV2Cfg : obric_v2 ("obric-v2") {
+        market,
+        second_ref_oracle,
+        third_ref_oracle,
+        reserve_x,
+        reserve_y,
+        ref_oracle,
+        x_price_feed,
+        y_price_feed,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -232,11 +363,11 @@ pub enum Command {
                  step size",
         after_help = "Examples:
   # Benchmark Humidifi swaps (WSOL->USDC) with the current AMM state, stepping from 1 to 100 with a step size of 1. The resulting CSV
-  # will be saved in the ./dataset directory
+  # will be saved in the ./datasets directory
   pmm-sim benchmark --pmms=humidifi --step=1.0,100.0,1.0
 
   # Benchmark SolfiV2 and Tessera swaps (USDC->USDT) with the current AMM state, stepping from 10 to 1000 with a step size of 5. The
-  # resulting CSVs will be saved in the ./dataset directory
+  # resulting CSVs will be saved in the ./datasets directory
   pmm-sim benchmark --pmms=solfi-v2,tessera --src-token=USDC --dst-token=USDT --step=10.0,1000.0,5.0
         "
     )]
@@ -351,7 +482,13 @@ impl<'a, P: Into<String> + Display + Clone + std::fmt::Debug> Debug for Environm
 }
 
 impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
-    fn new(programs_path: P, accounts_path: P, mints: Option<&[(Pubkey, u8)]>, cfg: PMMCfg) -> eyre::Result<Environment<'_, P>> {
+    fn new(
+        programs_path: P,
+        accounts_path: P,
+        mints: Option<&[(Pubkey, u8)]>,
+        cfg: PMMCfg,
+        slot: Option<u64>,
+    ) -> eyre::Result<Environment<'_, P>> {
         let mut budget = ComputeBudget::new_with_defaults(false);
         budget.compute_unit_limit = 20_000_000;
 
@@ -364,35 +501,35 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             }
         }
 
-        Ok(Environment { svm, slot: None, wallet, programs_path, accounts_path, mints, cfg })
+        Ok(Environment { svm, slot, wallet, programs_path, accounts_path, mints, cfg })
     }
 
     fn setup_wallet(&mut self, mint: &Pubkey, mint_amount: u64, airdrop_amount: u64) -> eyre::Result<()> {
         // create the ATAs for all initialised mints
         if let Some(mints) = self.mints {
             for (mint, _) in mints {
-                let ata = get_associated_token_address(&self.wallet.pubkey(), mint);
-                self.svm.set_account(ata, Misc::mk_ata(mint, &self.wallet.pubkey(), 0))?;
+                let ata = get_associated_token_address(&self.wallet_pubkey(), mint);
+                self.svm.set_account(ata, self.mk_ata(mint, &self.wallet_pubkey(), 0))?;
             }
         }
 
-        let ata = get_associated_token_address(&self.wallet.pubkey(), mint);
-        self.svm.set_account(ata, Misc::mk_ata(mint, &self.wallet.pubkey(), mint_amount))?;
+        let ata = get_associated_token_address(&self.wallet_pubkey(), mint);
+        self.svm.set_account(ata, self.mk_ata(mint, &self.wallet_pubkey(), mint_amount))?;
 
-        self.svm.airdrop(&self.wallet.pubkey(), airdrop_amount).expect("airdrop failed");
+        self.svm.airdrop(&self.wallet_pubkey(), airdrop_amount).expect("airdrop failed");
 
         Ok(())
     }
 
     fn reset_wallet(&mut self, mint: &Pubkey, amount: u64) -> eyre::Result<()> {
         let src_ata = self.wallet_ata(mint);
-        self.svm.set_account(src_ata, Misc::mk_ata(mint, &self.wallet.pubkey(), amount))?;
+        self.svm.set_account(src_ata, self.mk_ata(mint, &self.wallet_pubkey(), amount))?;
 
         if let Some(mints) = self.mints {
             for (m, _) in mints {
                 if m != mint {
                     let dst_ata = self.wallet_ata(m);
-                    self.svm.set_account(dst_ata, Misc::mk_ata(m, &self.wallet.pubkey(), 0))?;
+                    self.svm.set_account(dst_ata, self.mk_ata(m, &self.wallet_pubkey(), 0))?;
                 }
             }
         }
@@ -425,58 +562,48 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
         Ok(())
     }
 
-    fn load_accounts(&mut self, pmms: &[Dex], jit: bool, client: Option<&RpcClient>) -> eyre::Result<()> {
+    fn load_accounts(&mut self, accs: &Vec<(Pubkey, Account)>) -> eyre::Result<()> {
+        for (pubkey, acc) in accs {
+            self.svm.set_account(*pubkey, acc.clone())?;
+        }
+
+        Ok(())
+    }
+
+    fn fetch_and_load_accounts(&mut self, pmms: &[Dex], jit: bool, client: Option<&RpcClient>) -> eyre::Result<()> {
         match jit {
             true => {
                 let rpc_client = client.expect("RPC client is required for JIT account loading");
-                self.load_jit_accounts(pmms, rpc_client)?;
+                self.jit_accounts(pmms, rpc_client)?;
             }
             false => {
-                self.load_static_accounts(pmms)?;
+                self.static_accounts(pmms)?;
             }
         }
 
         Ok(())
     }
 
-    fn load_static_accounts(&mut self, pmms: &[Dex]) -> eyre::Result<()> {
-        let unique_pmms: HashSet<_> = pmms.iter().collect();
-        let mut all_slots: Vec<u64> = vec![];
+    fn static_accounts(&mut self, pmms: &[Dex]) -> eyre::Result<()> {
+        let (slot, accs_map) = Misc::read_accounts_disk(pmms, &self.accounts_path.to_string())?;
 
-        for dex in unique_pmms {
-            let (accounts, slot) = self.read_accounts_from_disk(dex)?;
-
+        for (dex, accounts) in accs_map {
             for (pubkey, account) in accounts {
                 self.svm.set_account(pubkey, account)?;
                 debug!("loaded account {pubkey} for {dex}");
             }
-
-            if let Some(s) = slot {
-                all_slots.push(s);
-            }
-
-            info!("loaded accounts for {dex}");
         }
 
-        // check if for some reason the slots logged in the accs config files differ
-        // if they do, warp up to the first slot
-        if !all_slots.is_empty() {
-            let first_slot = all_slots[0];
-            if all_slots.iter().any(|&s| s != first_slot) {
-                let min_slot = all_slots.iter().min().copied().unwrap();
-                let max_slot = all_slots.iter().max().copied().unwrap();
-                warn!("slot mismatch across Prop AMMs: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
-            }
-
-            self.svm.warp_to_slot(first_slot);
-            self.slot = Some(first_slot);
+        if let Some(s) = slot {
+            self.svm.warp_to_slot(s);
+            self.slot = Some(s);
         }
 
         Ok(())
     }
 
-    fn load_jit_accounts(&mut self, pmms: &[Dex], client: &RpcClient) -> eyre::Result<()> {
-        let (slot, fetched) = Misc::acquire_pmm_accounts(pmms, client, &self.cfg)?;
+    fn jit_accounts(&mut self, pmms: &[Dex], client: &RpcClient) -> eyre::Result<()> {
+        let (slot, fetched) = Misc::fetch_pmm_accounts(pmms, client, &self.cfg)?;
 
         for (dex, accounts) in fetched {
             for (pubkey, account) in accounts {
@@ -490,63 +617,6 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
         self.slot = Some(slot);
 
         Ok(())
-    }
-
-    fn read_accounts_from_disk(&self, pmm: &Dex) -> eyre::Result<(Vec<(Pubkey, Account)>, Option<u64>)> {
-        let prefix = pmm.to_string();
-        let accounts_path = format!("{}", self.accounts_path);
-        let data_dir = Path::new(&accounts_path);
-
-        if !data_dir.exists() {
-            return Ok((vec![], None));
-        }
-
-        let (mut accounts, mut slots) = (vec![], vec![]);
-        for entry in fs::read_dir(data_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file()
-                && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"))
-            {
-                let (pubkey, account, slot) = Self::read_account_from_file(&path)?;
-                accounts.push((pubkey, account));
-                if let Some(s) = slot {
-                    slots.push(s);
-                }
-            }
-        }
-
-        let slot = if slots.is_empty() {
-            None
-        } else {
-            let first_slot = slots[0];
-            if slots.iter().any(|&s| s != first_slot) {
-                let min_slot = slots.iter().min().copied().unwrap();
-                let max_slot = slots.iter().max().copied().unwrap();
-                warn!("slot mismatch for {pmm}: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
-            }
-            Some(first_slot)
-        };
-
-        debug!(?accounts, ?slot);
-        Ok((accounts, slot))
-    }
-
-    fn read_account_from_file(path: &Path) -> eyre::Result<(Pubkey, Account, Option<u64>)> {
-        let contents = fs::read_to_string(path)?;
-        let value: serde_json::Value = serde_json::from_str(&contents)?;
-
-        let pubkey = Pubkey::from_str(value["pubkey"].as_str().ok_or_else(|| eyre::eyre!("missing pubkey"))?)?;
-        let lamports = value["account"]["lamports"].as_u64().ok_or_else(|| eyre::eyre!("missing lamports"))?;
-        let data_base64 = value["account"]["data"][0].as_str().ok_or_else(|| eyre::eyre!("missing data"))?;
-        let data = general_purpose::STANDARD.decode(data_base64)?;
-        let owner = Pubkey::from_str(value["account"]["owner"].as_str().ok_or_else(|| eyre::eyre!("missing owner"))?)?;
-        let executable = value["account"]["executable"].as_bool().ok_or_else(|| eyre::eyre!("missing executable"))?;
-        let rent_epoch = value["account"]["rentEpoch"].as_u64().ok_or_else(|| eyre::eyre!("missing rentEpoch"))?;
-        let slot = value["slot"].as_u64();
-
-        Ok((pubkey, Account { lamports, data, owner, executable, rent_epoch }, slot))
     }
 
     fn save_account_to_disk(&self, dex: &Dex, pubkey: &Pubkey, account: &Account, slot: u64) -> eyre::Result<()> {
@@ -608,12 +678,33 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
 
         amount_out
     }
+
+    fn mk_ata(&self, mint: &Pubkey, user: &Pubkey, amount: u64) -> Account {
+        let ata = spl_token::state::Account {
+            mint: *mint,
+            owner: *user,
+            amount,
+            state: spl_token::state::AccountState::Initialized,
+            ..Default::default()
+        };
+
+        let mut data = vec![0u8; spl_token::state::Account::LEN];
+        ata.pack_into_slice(&mut data);
+
+        Account {
+            lamports: Rent::default().minimum_balance(data.len()),
+            data,
+            owner: spl_token::id(),
+            executable: false,
+            rent_epoch: u64::MAX,
+        }
+    }
 }
 
 /// A helper struct to construct swap instructions with the required accounts
 /// for different Prop AMMs.
 ///
-/// As is currently the case, all swaps pass through the Magnus Router program,
+/// As it currently stands, all swaps pass through the Magnus Router program,
 /// which in turn calls the respective Prop AMM program. Therefore, the swap
 /// instruction is built using the `SwapBuilder` from the `magnus-router-client`
 /// crate, and then the required accounts for the specific Prop AMM are attached.
@@ -766,18 +857,15 @@ impl<'a> ConstructSwap<'a> {
             let goonfi_param = Pubkey::new_from_array(goonfi_param_bytes);
 
             self.builder
-                .add_remaining_account(AccountMeta::new_readonly(
-                    Pubkey::new_from_array(magnus_shared::pmm_goonfi::id().to_bytes()),
-                    false,
-                ))
+                .add_remaining_account(AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_goonfi::id().to_bytes()), false))
                 .add_remaining_account(AccountMeta::new(self.payer, true))
                 .add_remaining_account(AccountMeta::new(self.sta, false))
                 .add_remaining_account(AccountMeta::new(self.dta, false))
-                .add_remaining_account(AccountMeta::new_readonly(goonfi_param, false))  // position 4
+                .add_remaining_account(AccountMeta::new_readonly(goonfi_param, false))
                 .add_remaining_account(AccountMeta::new(cfg.market, false))
-                .add_remaining_account(AccountMeta::new(cfg.base_token_acc, false))   // base_vault, not base_token_account
-                .add_remaining_account(AccountMeta::new(cfg.quote_token_acc, false))  // quote_vault, not quote_token_account
-                .add_remaining_account(AccountMeta::new_readonly(cfg.blacklist, false))  // position 8
+                .add_remaining_account(AccountMeta::new(cfg.base_token_acc, false))
+                .add_remaining_account(AccountMeta::new(cfg.quote_token_acc, false))
+                .add_remaining_account(AccountMeta::new_readonly(cfg.blacklist, false))
                 .add_remaining_account(AccountMeta::new_readonly(sysvar::instructions::id(), false))
                 .add_remaining_account(AccountMeta::new_readonly(spl_token::id(), false));
         } else {
@@ -788,25 +876,10 @@ impl<'a> ConstructSwap<'a> {
 
 struct Misc;
 impl Misc {
-    fn mk_ata(mint: &Pubkey, user: &Pubkey, amount: u64) -> Account {
-        let ata = spl_token::state::Account {
-            mint: *mint,
-            owner: *user,
-            amount,
-            state: spl_token::state::AccountState::Initialized,
-            ..Default::default()
-        };
-
-        let mut data = vec![0u8; spl_token::state::Account::LEN];
-        ata.pack_into_slice(&mut data);
-
-        Account {
-            lamports: Rent::default().minimum_balance(data.len()),
-            data,
-            owner: spl_token::id(),
-            executable: false,
-            rent_epoch: u64::MAX,
-        }
+    fn create_humidifi_param(swap_id: u64) -> Pubkey {
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&swap_id.to_le_bytes());
+        Pubkey::new_from_array(bytes)
     }
 
     fn mk_mint_acc(decimals: u8) -> Account {
@@ -830,16 +903,63 @@ impl Misc {
         }
     }
 
-    fn create_humidifi_param(swap_id: u64) -> Pubkey {
-        let mut bytes = [0u8; 32];
-        bytes[0..8].copy_from_slice(&swap_id.to_le_bytes());
-        Pubkey::new_from_array(bytes)
+    fn read_accounts_disk(pmms: &[Dex], accounts_path: &str) -> eyre::Result<(Option<u64>, HashMap<Dex, Vec<(Pubkey, Account)>>)> {
+        let unique_pmms: HashSet<_> = pmms.iter().collect();
+        let mut results = HashMap::new();
+        let mut all_slots: Vec<u64> = vec![];
+
+        let data_dir = Path::new(accounts_path);
+        if !data_dir.exists() {
+            return Ok((None, results));
+        }
+
+        for dex in unique_pmms {
+            let prefix = dex.to_string();
+            let mut dex_accounts = vec![];
+            let mut slots = vec![];
+
+            for entry in fs::read_dir(data_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.is_file()
+                    && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"))
+                {
+                    let (pubkey, account, slot) = Misc::parse_account_from_file(&path)?;
+                    dex_accounts.push((pubkey, account));
+                    if let Some(s) = slot {
+                        slots.push(s);
+                    }
+                }
+            }
+
+            if !slots.is_empty() {
+                all_slots.extend(&slots);
+            }
+
+            results.insert(*dex, dex_accounts);
+            info!("loaded accounts for {dex} from disk");
+        }
+
+        let slot = if all_slots.is_empty() {
+            None
+        } else {
+            let first_slot = all_slots[0];
+            if all_slots.iter().any(|&s| s != first_slot) {
+                let min_slot = all_slots.iter().min().copied().unwrap();
+                let max_slot = all_slots.iter().max().copied().unwrap();
+                warn!("slot mismatch across PMMs: accounts fetched at different slots ({min_slot} - {max_slot}), using {first_slot}");
+            }
+            Some(first_slot)
+        };
+
+        Ok((slot, results))
     }
 
-    fn acquire_pmm_accounts(pmms: &[Dex], client: &RpcClient, cfg: &PMMCfg) -> eyre::Result<(u64, Vec<(Dex, Vec<(Pubkey, Account)>)>)> {
+    fn fetch_pmm_accounts(pmms: &[Dex], client: &RpcClient, cfg: &PMMCfg) -> eyre::Result<(u64, HashMap<Dex, Vec<(Pubkey, Account)>>)> {
         let slot = client.get_slot()?;
         let unique_pmms: HashSet<_> = pmms.iter().collect();
-        let mut results = vec![];
+        let mut results = HashMap::new();
 
         info!("fetching accounts for {pmms:?} at slot {slot}");
         for dex in unique_pmms {
@@ -858,23 +978,78 @@ impl Misc {
                 }
             }
 
-            results.push((*dex, dex_accounts));
+            results.insert(*dex, dex_accounts);
         }
 
         Ok((slot, results))
     }
+
+    fn parse_account_from_file(path: &Path) -> eyre::Result<(Pubkey, Account, Option<u64>)> {
+        let contents = fs::read_to_string(path)?;
+        let value: serde_json::Value = serde_json::from_str(&contents)?;
+
+        let pubkey = Pubkey::from_str(value["pubkey"].as_str().ok_or_else(|| eyre::eyre!("missing pubkey"))?)?;
+        let lamports = value["account"]["lamports"].as_u64().ok_or_else(|| eyre::eyre!("missing lamports"))?;
+        let data_base64 = value["account"]["data"][0].as_str().ok_or_else(|| eyre::eyre!("missing data"))?;
+        let data = general_purpose::STANDARD.decode(data_base64)?;
+        let owner = Pubkey::from_str(value["account"]["owner"].as_str().ok_or_else(|| eyre::eyre!("missing owner"))?)?;
+        let executable = value["account"]["executable"].as_bool().ok_or_else(|| eyre::eyre!("missing executable"))?;
+        let rent_epoch = value["account"]["rentEpoch"].as_u64().ok_or_else(|| eyre::eyre!("missing rentEpoch"))?;
+        let slot = value["slot"].as_u64();
+
+        Ok((pubkey, Account { lamports, data, owner, executable, rent_epoch }, slot))
+    }
+
+    fn deserialize_pubkey<'de, D>(deserializer: D) -> Result<Pubkey, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Pubkey::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
-#[derive(Serialize)]
-struct BenchmarkRecord {
+#[derive(Debug, Serialize)]
+struct BenchmarkRecord<'a> {
     slot: u64,
-    pmm: String,
-    market: String,
-    src_token: String,
-    dst_token: String,
+    pmm: Dex,
+    market: &'a str,
+    src_token: &'a str,
+    dst_token: &'a str,
     amount_in: f64,
     amount_out: f64,
     compute_units: u64,
+}
+
+#[derive(Debug)]
+struct Benchmark<'a> {
+    records: Vec<BenchmarkRecord<'a>>,
+    writer: csv::Writer<File>,
+    save_path: String,
+}
+
+impl<'a> Benchmark<'a> {
+    pub fn new(records: Vec<BenchmarkRecord<'a>>, save_path: &str) -> eyre::Result<Self> {
+        let save_path = if save_path.ends_with(".csv") {
+            save_path.to_string()
+        } else {
+            format!("{}.csv", save_path)
+        };
+
+        let writer = Writer::from_path(&save_path)?;
+        Ok(Benchmark { records, writer, save_path })
+    }
+
+    pub fn save(&mut self) -> eyre::Result<()> {
+        for record in &self.records {
+            self.writer.serialize(record)?;
+        }
+
+        info!("saved benchmark records @ {}", self.save_path);
+        self.writer.flush()?;
+
+        Ok(())
+    }
 }
 
 pub struct Run {
@@ -899,9 +1074,9 @@ impl Run {
         let Command::FetchAccounts { http_url, accounts_path, pmms, .. } = &self.args.command else { unreachable!() };
 
         let rpc_client = RpcClient::new(http_url.expose_secret().to_string());
-        let env = Environment::new("", accounts_path, None, self.cfg.clone())?;
+        let env = Environment::new("", accounts_path, None, self.cfg.clone(), None)?;
 
-        let (slot, fetched) = Misc::acquire_pmm_accounts(pmms, &rpc_client, &self.cfg)?;
+        let (slot, fetched) = Misc::fetch_pmm_accounts(pmms, &rpc_client, &self.cfg)?;
         for (dex, accounts) in fetched {
             for (pubkey, account) in accounts {
                 env.save_account_to_disk(&dex, &pubkey, &account, slot)?;
@@ -926,96 +1101,135 @@ impl Run {
             (step[1] * 10f64.powi(src_dec as i32)) as u64,
             (step[2] * 10f64.powi(src_dec as i32)) as u64,
         ];
+        let steps_count = ((norm_step[1] - norm_step[0]) / norm_step[2] + 1) as u64;
 
-        let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(&mints), self.cfg.clone())?;
-        info!(?env);
+        let time = Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let multi = MultiProgress::new();
 
-        env.load_programs(pmms)?;
-        env.load_accounts(pmms, common.jit_accounts, Some(&rpc_client))?;
-        env.setup_wallet(&src_mint, norm_step[1], 10_000_000_000)?;
+        let (slot, accs_map) = if common.jit_accounts {
+            let (s, m) = Misc::fetch_pmm_accounts(pmms, &rpc_client, &self.cfg)?;
+            (Some(s), m)
+        } else {
+            Misc::read_accounts_disk(pmms, &common.accounts_path)?
+        };
 
-        let slot = env.slot.unwrap_or_default();
-        let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
+        thread::scope(|s| {
+            let handles: Vec<_> = pmms
+                .iter()
+                .map(|pmm| {
+                    let (cfg, multi, mints, time) = (&self.cfg, &multi, &mints, &time);
+                    let (src_name, dst_name) = (&src_name, &dst_name);
+                    let pmm_accounts = accs_map.get(pmm).cloned().unwrap_or_default();
 
-        let all_original_accounts: Vec<(Pubkey, Account)> = pmms
-            .iter()
-            .flat_map(|pmm| self.cfg.get_accounts(pmm).unwrap_or_default())
-            .filter_map(|pubkey| env.svm.get_account(&pubkey).map(|acc| (pubkey, acc)))
-            .collect();
+                    s.spawn(move || -> eyre::Result<()> {
+                        // start up the progress bar only when all the spawned threads
+                        // have finished bootstrapping so there's no CLI race
+                        let (mut env, src_ata, dst_ata, original_accounts) = multi.suspend(|| -> eyre::Result<_> {
+                            let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(mints), cfg.clone(), slot)?;
+                            env.load_programs(&[*pmm])?;
+                            env.load_accounts(&pmm_accounts.clone())?;
+                            env.setup_wallet(&src_mint, norm_step[1], 10_000_000_000)?;
 
-        let time = Local::now().format("%Y%m%d-%H%M%S");
-        for pmm in pmms {
-            let market = self.cfg.get_market(pmm).unwrap_or_else(|| panic!("{} not configured", pmm));
+                            let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
 
-            let mut r = vec![];
-            for amount_in in (norm_step[0]..=norm_step[1]).step_by(norm_step[2] as usize) {
-                env.reset_wallet(&src_mint, amount_in)?;
+                            Ok((env, src_ata, dst_ata, pmm_accounts))
+                        })?;
 
-                // Reset ALL PMM accounts to original state
-                for (pubkey, account) in &all_original_accounts {
-                    env.svm.set_account(*pubkey, account.clone())?;
+                        let market = cfg.get_market(pmm).unwrap_or_else(|| panic!("{} not configured", pmm)).to_string();
+
+                        let pb = multi.add(ProgressBar::new(steps_count));
+                        pb.set_style(ProgressStyle::default_bar().template(consts::PROGRESS_TEMPLATE)?.progress_chars("█▓░"));
+                        pb.set_prefix(format!("{}", pmm));
+
+                        let mut r = vec![];
+                        let mut warn_count = 0u64;
+                        let route: Vec<magnus_router_client::types::Route> = vec![Route { dexes: vec![*pmm], weights: vec![100] }.into()];
+                        for amount_in in (norm_step[0]..=norm_step[1]).step_by(norm_step[2] as usize) {
+                            let order_id = SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                            env.reset_wallet(&src_mint, amount_in)?;
+                            env.load_accounts(&original_accounts)?;
+
+                            let mut swap_builder = SwapBuilder::new();
+                            let swap = swap_builder
+                                .payer(env.wallet_pubkey())
+                                .source_token_account(src_ata)
+                                .destination_token_account(dst_ata)
+                                .source_mint(src_mint)
+                                .destination_mint(dst_mint)
+                                .amount_in(amount_in)
+                                .expect_amount_out(1)
+                                .min_return(1)
+                                .amounts(vec![amount_in])
+                                .routes(vec![route.clone()])
+                                .order_id(order_id);
+
+                            let mut construct = ConstructSwap {
+                                cfg: cfg.clone(),
+                                builder: swap,
+                                payer: env.wallet_pubkey(),
+                                sta: src_ata,
+                                dta: dst_ata,
+                                src_mint,
+                                dst_mint,
+                            };
+
+                            construct.attach_pmm_accs(pmm);
+                            let swap_ix = construct.instruction();
+
+                            let tx = Transaction::new_signed_with_payer(
+                                &[swap_ix],
+                                Some(&env.wallet_pubkey()),
+                                &[&env.wallet],
+                                env.latest_blockhash(),
+                            );
+
+                            let res = match env.send_transaction(tx) {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    if warn_count == 0 {
+                                        pb.println(format!("[WARN] {}: {:?}", pmm, e));
+                                    }
+                                    warn_count += 1;
+                                    pb.inc(1);
+                                    continue;
+                                }
+                            };
+
+                            let amount_out = env.get_event_amount_out(&res);
+
+                            r.push(BenchmarkRecord {
+                                slot: env.slot.unwrap_or_default(),
+                                pmm: *pmm,
+                                market: &market,
+                                src_token: src_name,
+                                dst_token: dst_name,
+                                amount_in: amount_in as f64 / 10f64.powi(src_dec as i32),
+                                amount_out: amount_out as f64 / 10f64.powi(dst_dec as i32),
+                                compute_units: res.compute_units_consumed,
+                            });
+
+                            pb.set_message(format!("in: {:.2}", amount_in as f64 / 10f64.powi(src_dec as i32)));
+                            pb.inc(1);
+                        }
+
+                        if warn_count > 0 {
+                            pb.println(format!("[WARN] {}: {} total failures", pmm, warn_count));
+                        }
+
+                        let filename = format!("{}/{}_{}_{}_{}.csv", datasets_path, env.slot.unwrap_or_default(), pmm, market, time);
+                        let _ = Benchmark::new(r, &filename)?.save();
+
+                        Ok(())
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                if let Err(e) = handle.join().expect("thread panicked") {
+                    warn!(?e, "benchmark thread failed");
                 }
-
-                let route: Vec<magnus_router_client::types::Route> = vec![Route { dexes: vec![*pmm], weights: vec![100] }.into()];
-                let mut swap_builder = SwapBuilder::new();
-                let swap = swap_builder
-                    .payer(env.wallet_pubkey())
-                    .source_token_account(src_ata)
-                    .destination_token_account(dst_ata)
-                    .source_mint(src_mint)
-                    .destination_mint(dst_mint)
-                    .amount_in(amount_in)
-                    .expect_amount_out(1)
-                    .min_return(1)
-                    .amounts(vec![amount_in])
-                    .routes(vec![route])
-                    .order_id(SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
-
-                let mut construct = ConstructSwap {
-                    cfg: self.cfg.clone(),
-                    builder: swap,
-                    payer: env.wallet_pubkey(),
-                    sta: src_ata,
-                    dta: dst_ata,
-                    src_mint,
-                    dst_mint,
-                };
-
-                construct.attach_pmm_accs(pmm);
-                let swap_ix = construct.instruction();
-
-                let tx = Transaction::new_signed_with_payer(&[swap_ix], Some(&env.wallet_pubkey()), &[&env.wallet], env.latest_blockhash());
-                let res = match env.send_transaction(tx) {
-                    Ok(res) => res,
-                    Err(e) => {
-                        warn!("transaction failed for {} with amount_in {}", pmm, amount_in);
-                        debug!(?e);
-                        continue;
-                    }
-                };
-                let amount_out = env.get_event_amount_out(&res);
-
-                r.push(BenchmarkRecord {
-                    slot,
-                    pmm: format!("{}", pmm),
-                    market: market.to_string(),
-                    src_token: src_name.clone(),
-                    dst_token: dst_name.clone(),
-                    amount_in: amount_in as f64 / 10f64.powi(src_dec as i32),
-                    amount_out: amount_out as f64 / 10f64.powi(dst_dec as i32),
-                    compute_units: res.compute_units_consumed,
-                });
             }
-
-            let filename = format!("{}/{}_{}_{}_{}.csv", datasets_path, slot, pmm, market, time);
-            let mut wtr = Writer::from_path(&filename)?;
-            for record in &r {
-                wtr.serialize(record)?;
-            }
-            wtr.flush()?;
-
-            info!("Saved {} records to {} for {}", r.len(), filename, pmm);
-        }
+        });
 
         Ok(())
     }
@@ -1045,9 +1259,9 @@ impl Run {
         let (dst_mint, dst_dec, dst_name) = (common.dst_token.get_addr(), common.dst_token.get_decimals(), common.dst_token.to_string());
         let mints = vec![(src_mint, src_dec), (dst_mint, dst_dec)];
 
-        let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(&mints), self.cfg.clone())?;
+        let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(&mints), self.cfg.clone(), None)?;
         env.load_programs(&flat_pmms)?;
-        env.load_accounts(&flat_pmms, common.jit_accounts, Some(&rpc_client))?;
+        env.fetch_and_load_accounts(&flat_pmms, common.jit_accounts, Some(&rpc_client))?;
 
         let norm_amount_in: Vec<u64> = amount_in.iter().map(|amount| amount * 10f64.powi(src_dec as i32)).map(|a| a as u64).collect();
         let norm_amount_in_sum: u64 = norm_amount_in.iter().sum();
@@ -1247,5 +1461,31 @@ mod tests {
         for (d, w) in pmms.iter().zip(weights.iter()) {
             assert_eq!(d.len(), w.len());
         }
+    }
+
+    #[test]
+    fn test_parse_step_valid() {
+        let result = CliArgs::parse_step("1.0,100.0,0.5").unwrap();
+        assert_eq!(result, [1.0, 100.0, 0.5]);
+    }
+
+    #[test]
+    fn test_parse_step_with_spaces() {
+        let result = CliArgs::parse_step("1.0, 100.0, 0.5").unwrap();
+        assert_eq!(result, [1.0, 100.0, 0.5]);
+    }
+
+    #[test]
+    fn test_parse_step_start_gte_end() {
+        let result = CliArgs::parse_step("100.0,50.0,1.0");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("start must be less than end"));
+    }
+
+    #[test]
+    fn test_parse_step_negative_step() {
+        let result = CliArgs::parse_step("1.0,100.0,-1.0");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("step must be positive"));
     }
 }
