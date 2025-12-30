@@ -24,7 +24,7 @@ Accounts are by default loaded (saved) from (at) [cfg/accounts](./cfg/accounts).
 
 Programs are by default loaded (saved) from (at) [cfg/programs](./cfg/programs). Tweaking the source/destination is possible via `--programs-path` or `PROGRAMS_PATH` env variable.
 
-Datasets are by default loaded (saved) from (at) [cfg/datasets](./cfg/datasets). Tweaking the source/destination is possible via `--datasets-path` or `DATASETS_PATH` env variable.
+Datasets are by default loaded (saved) from (at) [datasets](./datasets). Tweaking the source/destination is possible via `--datasets-path` or `DATASETS_PATH` env variable.
 
 Exchange rate & CU plots for benchmarked swaps at slot `389129965`:
 
@@ -72,10 +72,10 @@ cargo r -- multi --pmms="[[humidifi,solfi-v2],[humidifi]]" --weights "[[92, 8],[
 cargo r -- benchmark --step=1,4000,1 --pmms=tessera --src-token=wsol --dst-token=usdc
 ```
 
-##### Execute swaps on Humidifi, Tessera, SolfiV2 and Goonfi, from 1 to 1000 USDC to WSOL, in increments of 1 USDC, and save the results at [./dataset](./dataset).
+##### Execute swaps on Humidifi, Tessera, SolfiV2 and Goonfi, from 10K to 100K USDC to WSOL, in increments of 2 USDC, and save the results at [./dataset](./dataset).
 
 ```
-cargo r -- benchmark --step=1,1000,1 --pmms=humidifi,tessera,solfi-v2,goonfi --src-token=usdc --dst-token=wsol
+cargo r -- benchmark --step=10000,100000,100 --pmms=humidifi,tessera,solfi-v2,goonfi --src-token=usdc --dst-token=wsol
 ```
 
 ### Fetch live accounts
