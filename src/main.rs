@@ -186,7 +186,7 @@ define_dex_configs! {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Simulation environment for Solana Proprietary AMM swaps.\nSimulate Swaps across *any* of the major Solana Prop AMMs.", long_about = None)]
+#[command(version, about = "Simulation environment for Solana's Proprietary AMMs.\nSimulate swaps and Benchmark performance across *any* of the major Solana Prop AMMs.", long_about = None)]
 pub struct CliArgs {
     #[command(subcommand)]
     pub command: Command,

@@ -11,14 +11,14 @@ Supported Prop AMMs:
 - [x] TesseraV
 - [x] Goonfi
 
-The swaps can be done with either the local static accounts that can be found at [cfg/accounts](./cfg/accounts) or with the current live accounts (by fetching them on-the-go). By default all swaps & benchmark simulations are done with live accounts.
+The swaps can be done either with the local static accounts that can be found at [cfg/accounts](./cfg/accounts) or with the current live accounts (by fetching them on-the-go). By default all swaps & benchmark simulations are done with live accounts.
 
 Possible modes of execution include:
 
 - **single** - Run a single swap route across one or more Prop AMMs with specified weights.
 - **multi** - Execute swaps across nested Prop AMM routes. Each inner list represents a single route, each route possibly going through multiple Prop AMMs.
 - **fetch-accounts** - Fetch accounts for specified PMMs via RPC and save them locally (presumably for later usage).
-- **benchmark** - Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size. Benchmark data can be visualised with [plot.py](./scripts/plot.py).
+- **benchmark** - Benchmark swaps for any of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size. Furthermore benchmark data can be visualised with [plot.py](./scripts/plot.py).
 
 Accounts are by default loaded (saved) from (at) [cfg/accounts](./cfg/accounts). Tweaking the source/destination is possible via `--accounts-path` or `ACCOUNTS_PATH` env variable.
 
@@ -89,7 +89,7 @@ Once generated, the results can be plotted through [./scripts/plot.py](./scripts
 ##### Plots all the local datasets for slot `389141713`.
 
 ```
-./scripts/plot.py ./dataset/389141713*
+./scripts/plot.py ./datasets/389141713*
 ```
 
 ### Fetch live accounts
@@ -113,14 +113,14 @@ Check out the CLI subcommands for additional clues (i.e `pmm-sim single --help`)
 ```
 $ pmm-sim --help
 
-Simulation environment for Solana Proprietary AMM swaps.
-Simulate Swaps across *any* of the major Solana Prop AMMs.
+Simulation environment for Solana's Proprietary AMMs.
+Simulate swaps and Benchmark performance across *any* of the major Solana Prop AMMs.
 
 Usage: pmm-sim <COMMAND>
 
 Commands:
-  single          Run a single swap instruction across one or more Prop AMMs with specified weights.
-  multi           Execute multiple swap instructions across nested Prop AMM routes. Each inner list represents a single instruction, each instruction possibly going through multiple Prop AMMs.
+  single          Run a single swap route across one or more Prop AMMs with specified weights.
+  multi           Execute multiple swap routes across nested Prop AMM routes. Each inner list represents a single route, each route possibly going through multiple Prop AMMs.
   fetch-accounts  Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).
   benchmark       Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size
   help            Print this message or the help of the given subcommand(s)

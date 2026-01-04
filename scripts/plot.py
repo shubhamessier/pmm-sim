@@ -1,5 +1,5 @@
-"""Plot the exchange rate and compute units for Solana Prop AMM markets."""
 #!/usr/bin/env python3
+"""Plot the exchange rate and compute units for Solana Prop AMM markets."""
 
 import polars as pl
 import matplotlib.pyplot as plt
