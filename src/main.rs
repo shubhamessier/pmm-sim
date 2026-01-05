@@ -224,7 +224,7 @@ impl CliArgs {
         serde_json::from_str(s).map_err(|e| format!("invalid format: {}", e))
     }
 
-    fn parse_steps(s: &str) -> Result<[f64; 3], String> {
+    fn parse_range(s: &str) -> Result<[f64; 3], String> {
         let parts: Vec<f64> = s.split(',').map(|p| p.trim().parse::<f64>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
 
         let parts: [f64; 3] =
@@ -371,11 +371,11 @@ pub enum Command {
         after_help = "Examples:
   # Benchmark Humidifi swaps (WSOL->USDC) with the current AMM state, stepping from 1 to 100 with a step size of 1. The resulting CSV
   # will be saved in the ./datasets directory
-  pmm-sim benchmark --pmms=humidifi --steps=1.0,100.0,1.0
+  pmm-sim benchmark --pmms=humidifi --range=1.0,100.0,1.0
 
   # Benchmark SolfiV2 and Tessera swaps (WSOL->USDC) with the current AMM state, stepping from 10 to 1000 with a step size of 5. The
   # resulting CSVs will be saved in the ./datasets directory
-  pmm-sim benchmark --pmms=solfi-v2,tessera --src-token=WSOL --dst-token=USDC --steps=10.0,1000.0,5.0
+  pmm-sim benchmark --pmms=solfi-v2,tessera --src-token=WSOL --dst-token=USDC --range=10.0,1000.0,5.0
         "
     )]
     Benchmark {
@@ -388,8 +388,8 @@ pub enum Command {
         #[arg(long, env = "PROP_AMMS", value_delimiter = ',', default_value = "humidifi", help = "The Prop AMMs to benchmark")]
         pmms: Vec<Dex>,
 
-        #[arg(long, env = "STEPS", default_value = "1.0,100.0,1.0", value_parser = CliArgs::parse_steps, help = "Comma-separated step parameters: start, end, step")]
-        steps: [f64; 3],
+        #[arg(long, env = "RANGE", default_value = "1.0,100.0,1.0", value_parser = CliArgs::parse_range, help = "Comma-separated step parameters: start, end, step")]
+        range: [f64; 3],
     },
 }
 
@@ -1151,32 +1151,32 @@ impl<'a> Benchmark<'a> {
     }
 }
 
-/// Benchmark step configuration with normalized values.
+/// Benchmark Range configuration with normalized values.
 #[derive(Debug, Clone, Copy)]
-struct BenchmarkSteps {
+struct BenchmarkRange {
     start: u64,
     end: u64,
     step: u64,
 }
 
-impl BenchmarkSteps {
-    /// Creates normalized benchmark steps from human-readable values.
+impl BenchmarkRange {
+    /// Creates normalized benchmark range from human-readable values.
     ///
     /// Converts floating-point token amounts to their base unit representation
     /// using the token's decimal places.
     ///
     /// # Arguments
-    /// * `steps` - Array of [start, end, step] in human-readable token amounts
+    /// * `range` - Array of [start, end, step] in human-readable token amounts
     /// * `dec` - Number of decimal places for the token (e.g., 9 for SOL, 6 for USDC)
     ///
     /// # Example
     /// ```
     /// // For WSOL (9 decimals): 1.0 to 100.0 with step 0.5
-    /// let steps = BenchmarkSteps::from_human([1.0, 100.0, 0.5], 9);
-    /// assert_eq!(steps.start, 1_000_000_000); // 1 SOL in lamports
+    /// let range = BenchmarkRange::from_human([1.0, 100.0, 0.5], 9);
+    /// assert_eq!(range.start, 1_000_000_000); // 1 SOL in lamports
     /// ```
-    fn from_human(steps: [f64; 3], dec: u8) -> Self {
-        Self { start: Misc::to_raw(steps[0], dec), end: Misc::to_raw(steps[1], dec), step: Misc::to_raw(steps[2], dec) }
+    fn from_human(range: [f64; 3], dec: u8) -> Self {
+        Self { start: Misc::to_raw(range[0], dec), end: Misc::to_raw(range[1], dec), step: Misc::to_raw(range[2], dec) }
     }
 
     /// Returns the total number of iterations for this step configuration.
@@ -1225,14 +1225,14 @@ impl Run {
     }
 
     fn benchmark(&self) -> eyre::Result<()> {
-        let Command::Benchmark { common, datasets_path, pmms, steps } = &self.args.command else { unreachable!() };
+        let Command::Benchmark { common, datasets_path, pmms, range } = &self.args.command else { unreachable!() };
 
         let rpc_client = RpcClient::new(common.http_url.expose_secret().to_string());
         let (src_mint, src_dec, src_name) = (common.src_token.get_addr(), common.src_token.get_decimals(), common.src_token.to_string());
         let (dst_mint, dst_dec, dst_name) = (common.dst_token.get_addr(), common.dst_token.get_decimals(), common.dst_token.to_string());
         let mints = vec![(src_mint, src_dec), (dst_mint, dst_dec)];
 
-        let steps = BenchmarkSteps::from_human(*steps, src_dec);
+        let range = BenchmarkRange::from_human(*range, src_dec);
         let time_fmt = Local::now().format("%Y%m%d-%H%M%S").to_string();
         let multi = MultiProgress::new();
 
@@ -1257,7 +1257,7 @@ impl Run {
                         let (mut env, src_ata, dst_ata) = multi.suspend(|| -> eyre::Result<_> {
                             let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(mints), cfg.clone(), slot)?;
                             env.load_programs(&[*pmm])?;
-                            env.setup_wallet(&src_mint, steps.end, consts::AIRDROP_AMOUNT)?;
+                            env.setup_wallet(&src_mint, range.end, consts::AIRDROP_AMOUNT)?;
 
                             let (src_ata, dst_ata) = (env.wallet_ata(&src_mint), env.wallet_ata(&dst_mint));
 
@@ -1266,7 +1266,7 @@ impl Run {
 
                         let market = cfg.get_market(pmm).unwrap_or_else(|| panic!("{} not configured", pmm)).to_string();
 
-                        let pb = multi.add(ProgressBar::new(steps.count()));
+                        let pb = multi.add(ProgressBar::new(range.count()));
                         pb.set_style(
                             ProgressStyle::default_bar().template(consts::PROGRESS_TEMPLATE)?.progress_chars(consts::PROGRESS_CHARS),
                         );
@@ -1276,7 +1276,7 @@ impl Run {
                         let routes: Vec<Vec<magnus_router_client::types::Route>> =
                             vec![vec![Route { dexes: vec![*pmm], weights: vec![100] }.into()]];
 
-                        for amount_in in steps.iter() {
+                        for amount_in in range.iter() {
                             env.reset_wallet(&src_mint, amount_in)?;
                             env.load_accounts(&pmm_accounts)?;
 
@@ -1592,27 +1592,27 @@ mod tests {
         }
 
         #[test]
-        fn test_parse_step_valid() {
-            let result = CliArgs::parse_steps("1.0,100.0,0.5").unwrap();
+        fn test_parse_range_valid() {
+            let result = CliArgs::parse_range("1.0,100.0,0.5").unwrap();
             assert_eq!(result, [1.0, 100.0, 0.5]);
         }
 
         #[test]
-        fn test_parse_step_with_spaces() {
-            let result = CliArgs::parse_steps("1.0, 100.0, 0.5").unwrap();
+        fn test_parse_range_with_spaces() {
+            let result = CliArgs::parse_range("1.0, 100.0, 0.5").unwrap();
             assert_eq!(result, [1.0, 100.0, 0.5]);
         }
 
         #[test]
-        fn test_parse_step_start_gte_end() {
-            let result = CliArgs::parse_steps("100.0,50.0,1.0");
+        fn test_parse_range_start_gte_end() {
+            let result = CliArgs::parse_range("100.0,50.0,1.0");
             assert!(result.is_err());
             assert!(result.unwrap_err().contains("start must be less than end"));
         }
 
         #[test]
-        fn test_parse_step_negative_step() {
-            let result = CliArgs::parse_steps("1.0,100.0,-1.0");
+        fn test_parse_range_negative_step() {
+            let result = CliArgs::parse_range("1.0,100.0,-1.0");
             assert!(result.is_err());
             assert!(result.unwrap_err().contains("step must be positive"));
         }
