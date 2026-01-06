@@ -57,8 +57,8 @@ pub mod consts {
     pub const USDT: Pubkey = pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
     pub const USDT_DECIMALS: u8 = 6;
 
-    pub const PROGRESS_TEMPLATE: &str = "{prefix:>12.bold} [{bar:40.cyan/blue}] {pos:>6}/{len:<6} ({percent}%)";
     pub const PROGRESS_CHARS: &str = "█▓░";
+    pub const PROGRESS_TEMPLATE: &str = "{prefix:>12.bold} [{bar:40.cyan/blue}] {pos:>6}/{len:<6} ({percent}%)";
 
     // used to pay for tx fees
     pub const AIRDROP_AMOUNT: u64 = 100_000_000_000;
@@ -304,14 +304,21 @@ pub enum Command {
         about = "Execute multiple swap routes across nested Prop AMM routes. Each inner list represents a single route, each route \
                  possibly going through multiple Prop AMMs.",
         after_help = "Examples:
-  # Single swap with one Prop AMM
-  pmm-sim multi --pmms='[[humidifi]]' --weights='[[100]]'
 
-  # Two sequential swaps: (Humidifi + Obric) followed by Zerofi
-  pmm-sim multi --pmms='[[humidifi,zerofi],[solfi-v2]]' --weights='[[50,50],[100]]'
+  # Execute a two-fold multi-route (WSOL -> USDC) swap. The first route goes through humidifi and goonfi, the second route goes through \
+                      solfi-v2. The swap amounts are 311 WSOL and 234 WSOL respectively.
+  pmm-sim multi --pmms='[[humidifi,goonfi],[solfi-v2]]' --weights='[[50,50],[100]]' --src-token=wsol --dst-token=usdc --amount-in=311,234
 
-  # Complex three-step nested route
-  pmm-sim multi --amount-in=10 --pmms='[[humidifi,tessera],[solfi-v2],[goonfi,humidifi]]' --weights='[[100],[60,40],[95,5]]'"
+  # Execute a three-fold multi-route (WSOL -> USDC) swap. The first route goes through humidifi and tessera, the second route goes through \
+                      solfi-v2, and the third route goes through goonfi and humidifi. The swap amounts are 10 WSOL, 50 WSOL, and 350 WSOL \
+                      respectively.
+  pmm-sim multi --amount-in=10,50,350 --pmms='[[humidifi,tessera],[solfi-v2],[goonfi,humidifi]]' --weights='[[11,89],[100],[5,95]]'
+
+  # Execute a three-fold multi-route (USDC -> WSOL) swap: The first route goes through humidifi and solfi-v2, the second route goes \
+                      through goonfi, and the third route goes through solfi-v2 and goonfi. The swap amounts are 15K USDC, 1K USDC, and \
+                      33K USDC respectively.
+  pmm-sim multi --pmms='[[humidifi,solfi-v2],[goonfi],[solfi-v2,goonfi]]' --weights='[[25,75],[100],[33,67]]' \
+                      --amount-in=150000,1000,33000 --src-token=USDC --dst-token=WSOL --jit-accounts=true"
     )]
     Multi {
         #[command(flatten)]
@@ -339,6 +346,31 @@ pub enum Command {
     },
 
     #[command(
+        about = "Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and \
+                 step size",
+        after_help = "Examples:
+  # Benchmark swaps on Humidifi,Tessera,SolfiV2 and Goonfi, from 1 to 4000 WSOL to USDC, in increments of 1 WSOL.
+  pmm-sim benchmark --range=1.0,4000.0,1.0 --pmms=humidifi,tessera,solfi-v2,goonfi --src-token=wsol --dst-token=usdc
+
+  Benchmark swaps on Tessera and SolfiV2, from 1 to 250 WSOL, in increments of 0.01 WSOL.
+  pmm-sim benchmark --range=1.0,250.0,0.01 --pmms=tessera,solfi-v2 --src-token=wsol --dst-token=usdc
+        "
+    )]
+    Benchmark {
+        #[command(flatten)]
+        common: CommonArgs,
+
+        #[arg(long, env = "DATASETS_PATH", default_value = consts::DATASETS_PATH, help = "Directory to dump the benchmark CSVs into")]
+        datasets_path: String,
+
+        #[arg(long, env = "PROP_AMMS", value_delimiter = ',', default_value = "humidifi", help = "The Prop AMMs to benchmark")]
+        pmms: Vec<Dex>,
+
+        #[arg(long, env = "RANGE", default_value = "1.0,100.0,1.0", value_parser = CliArgs::parse_range, help = "Comma-separated step parameters: start, end, step")]
+        range: [f64; 3],
+    },
+
+    #[command(
         about = "Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).",
         after_help = "Examples:
   pmm-sim fetch-accounts --pmms=humidifi
@@ -363,33 +395,6 @@ pub enum Command {
             help = "Comma-separated list of Prop AMMs to fetch accounts for"
         )]
         pmms: Vec<Dex>,
-    },
-
-    #[command(
-        about = "Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and \
-                 step size",
-        after_help = "Examples:
-  # Benchmark Humidifi swaps (WSOL->USDC) with the current AMM state, stepping from 1 to 100 with a step size of 1. The resulting CSV
-  # will be saved in the ./datasets directory
-  pmm-sim benchmark --pmms=humidifi --range=1.0,100.0,1.0
-
-  # Benchmark SolfiV2 and Tessera swaps (WSOL->USDC) with the current AMM state, stepping from 10 to 1000 with a step size of 5. The
-  # resulting CSVs will be saved in the ./datasets directory
-  pmm-sim benchmark --pmms=solfi-v2,tessera --src-token=WSOL --dst-token=USDC --range=10.0,1000.0,5.0
-        "
-    )]
-    Benchmark {
-        #[command(flatten)]
-        common: CommonArgs,
-
-        #[arg(long, env = "DATASETS_PATH", default_value = consts::DATASETS_PATH, help = "Directory to dump the benchmark CSVs into")]
-        datasets_path: String,
-
-        #[arg(long, env = "PROP_AMMS", value_delimiter = ',', default_value = "humidifi", help = "The Prop AMMs to benchmark")]
-        pmms: Vec<Dex>,
-
-        #[arg(long, env = "RANGE", default_value = "1.0,100.0,1.0", value_parser = CliArgs::parse_range, help = "Comma-separated step parameters: start, end, step")]
-        range: [f64; 3],
     },
 }
 
