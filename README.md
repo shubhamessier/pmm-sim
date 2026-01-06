@@ -64,10 +64,10 @@ cargo build --release
 
 ### Multi-route swaps
 
-##### Swap 103 WSOL for USDC in a multi-route swap, 100 WSOL via Humidifi and SolfiV2 (split 92%/8%) in one route, and 3 WSOL via SolfiV2 in another route.
+##### Swap 103 WSOL for USDC in a multi-route swap, 100 WSOL via Humidifi and SolfiV2 (split 92%/8%) in one route, and 3 WSOL via Tessera in another route.
 
 ```
-./target/release/pmm-sim multi --pmms="[[humidifi,solfi-v2],[humidifi]]" --weights="[[92, 8],[100]]" --amount-in=100,3
+./target/release/pmm-sim multi --pmms="[[humidifi,solfi-v2],[tessera]]" --weights="[[92, 8],[100]]" --amount-in=100,3
 ```
 
 ##### Execute two routes, the first swapping 150,000 USDC for WSOL using Humidifi and SolfiV2 (split 25%/75%), the second swapping 1000 USDC for WSOL using Goonfi. Uses the static accounts (i.e the accounts found at [./cfg/accounts](./cfg/accounts)).
