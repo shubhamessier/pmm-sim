@@ -149,7 +149,7 @@ macro_rules! define_dex_configs {
 // All DEX Cfgs
 // Reference the cfg file — `setup.toml`
 define_dex_configs! {
-    Humidifi => HumidifiCfg : humidifi ("humidifi") {
+    HumidiFi => HumidiFiCfg : humidifi ("humidifi") {
         market,
         base_ta,
         quote_ta,
@@ -160,7 +160,7 @@ define_dex_configs! {
         quote_ta,
         global_state,
     },
-    Goonfi => GoonfiCfg : goonfi ("goonfi") {
+    GoonFi => GoonFiCfg : goonfi ("goonfi") {
         market,
         base_ta,
         quote_ta,
@@ -173,7 +173,7 @@ define_dex_configs! {
         cfg,
         oracle,
     },
-    Zerofi => ZerofiCfg : zerofi ("zerofi") {
+    ZeroFi => ZeroFiCfg : zerofi ("zerofi") {
         market,
         vault_info_base,
         vault_base,
@@ -189,6 +189,11 @@ define_dex_configs! {
         ref_oracle,
         x_price_feed,
         y_price_feed,
+    },
+    BisonFi => BisonfiCfg : bisonfi ("bisonfi") {
+        market,
+        market_base_ta,
+        market_quote_ta,
     },
 }
 
@@ -349,7 +354,7 @@ pub enum Command {
         about = "Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and \
                  step size",
         after_help = "Examples:
-  # Benchmark swaps on Humidifi,Tessera,SolfiV2 and Goonfi, from 1 to 4000 WSOL to USDC, in increments of 1 WSOL.
+  # Benchmark swaps on HumidiFi,Tessera,SolfiV2 and GoonFi, from 1 to 4000 WSOL to USDC, in increments of 1 WSOL.
   pmm-sim benchmark --range=1.0,4000.0,1.0 --pmms=humidifi,tessera,solfi-v2,goonfi --src-token=wsol --dst-token=usdc
 
   Benchmark swaps on Tessera and SolfiV2, from 1 to 250 WSOL, in increments of 0.01 WSOL.
@@ -623,9 +628,9 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
 
     /// Fetches PMM accounts from RPC and warps to the fetched slot.
     fn jit_accounts(&mut self, pmms: &[Dex], client: &RpcClient) -> eyre::Result<()> {
-        let (slot, fetched) = Misc::fetch_accounts(pmms, client, &self.cfg)?;
+        let (slot, accs_map) = Misc::fetch_accounts(pmms, client, &self.cfg)?;
 
-        fetched.iter().try_for_each(|(_, accs)| self.load_accounts(accs))?;
+        accs_map.iter().try_for_each(|(_, accs)| self.load_accounts(accs))?;
 
         self.svm.warp_to_slot(slot);
         self.slot = Some(slot);
@@ -678,7 +683,7 @@ impl<'a, P: Into<String> + Display + Clone + Debug> Environment<'a, P> {
             .iter()
             .find_map(|log| {
                 if log.contains("SwapEvent") {
-                    // i.e.: "Program log: SwapEvent { dex: Humidifi, amount_in: 1000000000, amount_out: 121518066 }"
+                    // i.e.: "Program log: SwapEvent { dex: HumidiFi, amount_in: 1000000000, amount_out: 121518066 }"
                     log.split("amount_out: ").nth(1)?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
                 } else {
                     None
@@ -721,12 +726,13 @@ impl<'a> ConstructSwap<'a> {
     /// appropriate PMM-specific attachment function based on the DEX type.
     fn attach_pmm_accs(&mut self, pmm: &Dex) {
         match pmm {
-            Dex::Humidifi => self.attach_humidifi_accs(),
+            Dex::HumidiFi => self.attach_humidifi_accs(),
             Dex::SolfiV2 => self.attach_solfiv2_accs(),
-            Dex::Zerofi => self.attach_zerofi_accs(),
+            Dex::ZeroFi => self.attach_zerofi_accs(),
             Dex::ObricV2 => self.attach_obric_v2_accs(),
             Dex::Tessera => self.attach_tessera_accs(),
-            Dex::Goonfi => self.attach_goonfi_accs(),
+            Dex::GoonFi => self.attach_goonfi_accs(),
+            Dex::BisonFi => self.attach_bisonfi_accs(),
             _ => {
                 unimplemented!()
             }
@@ -859,6 +865,25 @@ impl<'a> ConstructSwap<'a> {
             AccountMeta::new_readonly(cfg.blacklist, false),
             AccountMeta::new_readonly(sysvar::instructions::id(), false),
             AccountMeta::new_readonly(spl_token::id(), false),
+        ]);
+    }
+
+    fn attach_bisonfi_accs(&mut self) {
+        let Some(cfg) = &self.cfg.bisonfi else {
+            panic!("BisonFi config is missing, cannot attach accounts.");
+        };
+
+        self.builder.add_remaining_accounts(&[
+            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_bisonfi::id().to_bytes()), false),
+            AccountMeta::new(self.payer, true),
+            AccountMeta::new(cfg.market, false),
+            AccountMeta::new(cfg.market_base_ta, false),
+            AccountMeta::new(cfg.market_quote_ta, false),
+            AccountMeta::new(self.src_ta, false),
+            AccountMeta::new(self.dst_ta, false),
+            AccountMeta::new_readonly(spl_token::id(), false),
+            AccountMeta::new_readonly(spl_token::id(), false),
+            AccountMeta::new_readonly(sysvar::instructions::id(), false),
         ]);
     }
 }
@@ -1500,56 +1525,56 @@ mod tests {
         fn test_parse_nested_pmms_json_single() {
             let input = r#"[["humidifi"]]"#;
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::Humidifi]]);
+            assert_eq!(result, vec![vec![Dex::HumidiFi]]);
         }
 
         #[test]
         fn test_parse_nested_pmms_json_multiple() {
             let input = r#"[["humidifi","obric-v2"],["zerofi"]]"#;
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2], vec![Dex::Zerofi]]);
+            assert_eq!(result, vec![vec![Dex::HumidiFi, Dex::ObricV2], vec![Dex::ZeroFi]]);
         }
 
         #[test]
         fn test_parse_nested_pmms_no_quotes_single() {
             let input = "[[humidifi]]";
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::Humidifi]]);
+            assert_eq!(result, vec![vec![Dex::HumidiFi]]);
         }
 
         #[test]
         fn test_parse_nested_pmms_no_quotes_single_route_multiple_pmms() {
             let input = "[[humidifi,obric-v2]]";
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2]]);
+            assert_eq!(result, vec![vec![Dex::HumidiFi, Dex::ObricV2]]);
         }
 
         #[test]
         fn test_parse_nested_pmms_no_quotes_multiple_routes() {
             let input = "[[humidifi,obric-v2],[zerofi]]";
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2], vec![Dex::Zerofi]]);
+            assert_eq!(result, vec![vec![Dex::HumidiFi, Dex::ObricV2], vec![Dex::ZeroFi]]);
         }
 
         #[test]
         fn test_parse_nested_pmms_no_quotes_three_routes() {
             let input = "[[humidifi],[obric-v2,solfi-v2],[zerofi]]";
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::Humidifi], vec![Dex::ObricV2, Dex::SolfiV2], vec![Dex::Zerofi],]);
+            assert_eq!(result, vec![vec![Dex::HumidiFi], vec![Dex::ObricV2, Dex::SolfiV2], vec![Dex::ZeroFi],]);
         }
 
         #[test]
         fn test_parse_nested_pmms_no_quotes_all_pmms() {
             let input = "[[raydium-cl-v2,raydium-cp],[obric-v2,solfi-v2,zerofi,humidifi]]";
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::RaydiumClV2, Dex::RaydiumCp], vec![Dex::ObricV2, Dex::SolfiV2, Dex::Zerofi, Dex::Humidifi],]);
+            assert_eq!(result, vec![vec![Dex::RaydiumClV2, Dex::RaydiumCp], vec![Dex::ObricV2, Dex::SolfiV2, Dex::ZeroFi, Dex::HumidiFi],]);
         }
 
         #[test]
         fn test_parse_nested_pmms_no_quotes_with_spaces() {
             let input = "[[ humidifi , obric-v2 ],[ zerofi ]]";
             let result = CliArgs::parse_nested_pmms(input).unwrap();
-            assert_eq!(result, vec![vec![Dex::Humidifi, Dex::ObricV2], vec![Dex::Zerofi]]);
+            assert_eq!(result, vec![vec![Dex::HumidiFi, Dex::ObricV2], vec![Dex::ZeroFi]]);
         }
 
         #[test]
