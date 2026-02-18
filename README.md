@@ -17,7 +17,7 @@ Swaps and benchmarks can be done through direct offchain calls, or alternatively
 The swaps and benchmarks can be done with the local static accounts/programs stored at [./cfg/](./cfg/) or with the current live ones by fetching them on-the-go. By default all swaps & benchmark simulations are done with real-time accounts/programs. The markets for each Prop AMM are specified in [./cfg/setup.toml](./cfg/setup.toml).
 
 ![all](./assets/all_rate.png)
-_Figure 1: Exchange rates for WSOL -> USDC at slot `401101387`_
+_Figure 1: Exchange rates for WSOL -> USDC at discrete slot `401101387`, with CPI call from [magnus-router](https://github.com/LimeChain/magnus/tree/master/crates/router)_
 
 Possible modes of execution include:
 
@@ -75,7 +75,7 @@ cargo build --release
   --src-token=USDC --dst-token=WSOL
 ```
 
-##### Swap 375 WSOL for USDC using Tessera and SolFiV2's [65Z market](https://solscan.io/account/65ZHSArs5XxPseKQbB1B4r16vDxMWnCxHMzogDAqiDUc) , in one route, split evenly - 187,5 WSOL per Prop AMM, spoofed as DFlow.
+##### Swap 375 WSOL for USDC using Tessera and SolFiV2's [65Z market](https://solscan.io/account/65ZHSArs5XxPseKQbB1B4r16vDxMWnCxHMzogDAqiDUc), in one route, split evenly - 187,5 WSOL per Prop AMM, spoofed as DFlow.
 
 ```
 ./target/release/pmm-sim single --spoof=dflow --amount-in=375 --pmms=tessera,solfi-v2_65Z \
@@ -220,10 +220,10 @@ Usage: pmm-sim <COMMAND>
 
 Commands:
   direct          Initialize an environment for a single PMM and execute a direct swap.
-  fetch-accounts  Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).
   router-single   Run a single swap route across one or more Prop AMMs with specified weights.
   router-multi    Execute multiple swap routes across nested Prop AMM routes. Each inner list represents a single route, each route possibly going through multiple Prop AMMs.
   benchmark       Benchmark swaps for any one of the implemented Prop AMMs by specifying, optionally, the accounts, src/dst tokens and step size
+  fetch-accounts  Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).
   fetch-programs  Fetch programs from the specified Pmms via RPC and save them locally (presumably for later usage).
   help            Print this message or the help of the given subcommand(s)
 
