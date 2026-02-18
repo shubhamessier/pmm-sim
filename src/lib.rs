@@ -2,7 +2,7 @@
 //!
 //! Simulate and/or Benchmark swaps across *any* of the major Solana Proprietary AMMs, locally, using LiteSVM.
 #![doc = include_str!("../README.md")]
-#![allow(clippy::type_complexity, clippy::result_large_err)]
+#![allow(clippy::type_complexity, clippy::result_large_err, clippy::too_many_arguments)]
 
 pub mod cfg;
 pub mod env;
@@ -23,11 +23,11 @@ use magnus_shared::{Dex, Route};
 use polars::prelude::{Column, DataFrame, ParquetWriter};
 use secrecy::{ExposeSecret, SecretString};
 use solana_client::rpc_client::RpcClient;
-use solana_sdk::{account::Account, message::AccountMeta, pubkey, pubkey::Pubkey, sysvar, transaction::Transaction};
+use solana_sdk::{account::Account, instruction::Instruction, message::AccountMeta, pubkey, pubkey::Pubkey, transaction::Transaction};
 use tracing::{debug, info, warn};
 
 use crate::{
-    cfg::{Cfg, PMMTarget},
+    cfg::{Cfg, PMMTarget, Swap},
     env::Environment,
     misc::Misc,
 };
@@ -36,10 +36,10 @@ use crate::{
 /// Holds the CFG file paths, templates, limits and more;
 pub mod consts {
     pub const ROUTER: &str = "magnus-router";
-    pub const SETUP_PATH: &str = "./cfg/setup.toml";
     pub const DATASETS_PATH: &str = "./datasets";
-    pub const PROGRAMS_PATH: &str = "./cfg/programs";
+    pub const SETUP_PATH: &str = "./cfg/setup.toml";
     pub const ACCOUNTS_PATH: &str = "./cfg/accounts";
+    pub const PROGRAMS_PATH: &str = "./cfg/programs";
 
     pub const PROGRESS_CHARS: &str = "█▓░";
     pub const PROGRESS_TEMPLATE: &str = "{prefix:>12.bold} [{bar:40.cyan/blue}] {pos:>6}/{len:<6} ({percent}%)";
@@ -148,7 +148,47 @@ pub struct CommonArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
+    #[command(about = "Initialize an environment for a single PMM and execute a direct swap.")]
+    Direct {
+        #[command(flatten)]
+        common: CommonArgs,
+
+        #[arg(long, help = "The Prop AMM to use (optionally with market hint, e.g. humidifi_Fk)")]
+        pmm: PMMTarget,
+
+        #[arg(long, env = "AMOUNT_IN", default_value_t = 1.0, help = "The amount of tokens to trade")]
+        amount_in: f64,
+    },
+
     #[command(
+        about = "Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).",
+        after_help = "Examples:
+  pmm-sim fetch-accounts --pmms=humidifi
+  pmm-sim fetch-accounts --pmms=humidifi,obric-v2,zerofi,solfi-v2
+  pmm-sim \
+                      fetch-accounts --pmms=humidifi --http-url=https://my-rpc.com"
+    )]
+    FetchAccounts {
+        #[arg(long, env = "HTTP_URL", default_value = "https://api.mainnet.solana.com")]
+        http_url: SecretString,
+
+        #[arg(long, env = "SETUP_PATH", default_value = consts::SETUP_PATH, help = "Path to the setup configuration file")]
+        setup_path: String,
+
+        #[arg(long, env = "ACCOUNTS_PATH", default_value = consts::ACCOUNTS_PATH, help = "Directory to save fetched accounts")]
+        accounts_path: String,
+
+        #[arg(
+            long,
+            value_delimiter = ',',
+            default_values_t = CliArgs::default_pmm(),
+            help = "Comma-separated list of Prop AMMs to fetch accounts for"
+        )]
+        pmms: Vec<PMMTarget>,
+    },
+
+    #[command(
+        alias = "single",
         about = "Run a single swap route across one or more Prop AMMs with specified weights.",
         after_help = "Examples:
   pmm-sim single --pmms=humidifi --weights=100 --amount-in=100 --src-token=WSOL --dst-token=USDC
@@ -156,7 +196,7 @@ pub enum Cmd {
   pmm-sim single --amount-in=10000 --pmms=solfi-v2,tessera --weights=30,70
   pmm-sim single --spoof=jupiter --amount-in=10000 --pmms=obric-v2 --weights=100 --src-token=USDC --dst-token=USDT"
     )]
-    Single {
+    RouterSingle {
         #[command(flatten)]
         common: CommonArgs,
 
@@ -179,6 +219,7 @@ pub enum Cmd {
     },
 
     #[command(
+        alias = "multi",
         about = "Execute multiple swap routes across nested Prop AMM routes. Each inner list represents a single route, each route \
                  possibly going through multiple Prop AMMs.",
         after_help = "Examples:
@@ -198,7 +239,7 @@ pub enum Cmd {
   pmm-sim multi --pmms='[[humidifi,solfi-v2],[goonfi],[solfi-v2,goonfi]]' --weights='[[25,75],[100],[33,67]]' \
                       --amount-in=150000,1000,33000 --src-token=USDC --dst-token=WSOL --jit-accounts=true"
     )]
-    Multi {
+    RouterMulti {
         #[command(flatten)]
         common: CommonArgs,
 
@@ -258,33 +299,14 @@ pub enum Cmd {
 
         #[arg(long, env = "RANGE", default_value = "1.0,100.0,1.0", value_parser = CliArgs::parse_range, help = "Comma-separated step parameters: start, end, step")]
         range: [f64; 3],
-    },
-
-    #[command(
-        about = "Fetch accounts from the specified Pmms via RPC and save them locally (presumably for later usage).",
-        after_help = "Examples:
-  pmm-sim fetch-accounts --pmms=humidifi
-  pmm-sim fetch-accounts --pmms=humidifi,obric-v2,zerofi,solfi-v2
-  pmm-sim \
-                      fetch-accounts --pmms=humidifi --http-url=https://my-rpc.com"
-    )]
-    FetchAccounts {
-        #[arg(long, env = "HTTP_URL", default_value = "https://api.mainnet.solana.com")]
-        http_url: SecretString,
-
-        #[arg(long, env = "SETUP_PATH", default_value = consts::SETUP_PATH, help = "Path to the setup configuration file")]
-        setup_path: String,
-
-        #[arg(long, env = "ACCOUNTS_PATH", default_value = consts::ACCOUNTS_PATH, help = "Directory to save fetched accounts")]
-        accounts_path: String,
 
         #[arg(
             long,
-            value_delimiter = ',',
-            default_values_t = CliArgs::default_pmm(),
-            help = "Comma-separated list of Prop AMMs to fetch accounts for"
+            env = "CALL_TYPE",
+            default_value = "cpi",
+            help = "Swap call type: cpi (through router) or direct (standalone PMM instruction)"
         )]
-        pmms: Vec<PMMTarget>,
+        call_type: CallType,
     },
 
     #[command(
@@ -319,7 +341,10 @@ impl Cmd {
     pub fn setup_path(&self) -> &str {
         match self {
             Cmd::FetchAccounts { setup_path, .. } | Cmd::FetchPrograms { setup_path, .. } => setup_path,
-            Cmd::Benchmark { common, .. } | Cmd::Single { common, .. } | Cmd::Multi { common, .. } => &common.setup_path,
+            Cmd::Benchmark { common, .. }
+            | Cmd::RouterSingle { common, .. }
+            | Cmd::RouterMulti { common, .. }
+            | Cmd::Direct { common, .. } => &common.setup_path,
         }
     }
 
@@ -328,13 +353,14 @@ impl Cmd {
             Cmd::FetchAccounts { .. } => "FetchAccounts",
             Cmd::FetchPrograms { .. } => "FetchPrograms",
             Cmd::Benchmark { .. } => "Benchmark",
-            Cmd::Single { .. } => "SingleRouteSwaps",
-            Cmd::Multi { .. } => "MultiRouteSwaps",
+            Cmd::RouterSingle { .. } => "SingleRouteSwaps",
+            Cmd::RouterMulti { .. } => "MultiRouteSwaps",
+            Cmd::Direct { .. } => "Direct",
         }
     }
 }
 
-/// The Aggregators we can spoof as, as a source of CPI calls
+/// The Aggregators we can spoof as, when doing CPI calls
 #[derive(Debug, Copy, Clone, clap::ValueEnum)]
 pub enum Aggregator {
     #[value(name = "dflow")]
@@ -365,6 +391,13 @@ impl std::fmt::Display for Aggregator {
             Aggregator::Titan => write!(f, "titan"),
         }
     }
+}
+
+#[derive(clap::ValueEnum, Clone, Debug, Default)]
+pub enum CallType {
+    #[default]
+    Cpi,
+    Direct,
 }
 
 /// A helper struct to construct swap instructions with the required accounts
@@ -431,22 +464,9 @@ impl<'a> ConstructSwap<'a> {
             .and_then(|c| c.swap_v1.get(market))
             .unwrap_or_else(|| panic!("SolFiV2 market {market} not configured"));
 
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_solfi_v2::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new_readonly(cfg.oracle, false),
-            AccountMeta::new_readonly(cfg.cfg, false),
-            AccountMeta::new(cfg.base_ta, false),
-            AccountMeta::new(cfg.quote_ta, false),
-            AccountMeta::new(cfg.base_mint, false),
-            AccountMeta::new(cfg.quote_mint, false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(sysvar::instructions::id(), false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_solfi_v2::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, None, None));
+        self.builder.add_remaining_accounts(&accs);
     }
 
     pub fn attach_humidifi_accs(&mut self, market: &Pubkey) {
@@ -457,19 +477,10 @@ impl<'a> ConstructSwap<'a> {
             .and_then(|c| c.swap_v1.get(market))
             .unwrap_or_else(|| panic!("HumidiFi market {market} not configured"));
 
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new_readonly(Misc::create_humidifi_param(1500), false),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new(cfg.base_ta, false),
-            AccountMeta::new(cfg.quote_ta, false),
-            AccountMeta::new_readonly(sysvar::clock::id(), false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(sysvar::instructions::id(), false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, None, None));
+        accs.push(AccountMeta::new_readonly(Misc::create_humidifi_param(1500), false));
+        self.builder.add_remaining_accounts(&accs);
     }
 
     pub fn attach_humidifi_swap_v2v3_accs(&mut self, pmm: &Dex, market: &Pubkey) {
@@ -481,43 +492,19 @@ impl<'a> ConstructSwap<'a> {
         }
         .unwrap_or_else(|| panic!("{pmm} market {market} not configured"));
 
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new_readonly(Misc::create_humidifi_param(1500), false),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new(cfg.base_ta, false),
-            AccountMeta::new(cfg.quote_ta, false),
-            AccountMeta::new_readonly(sysvar::clock::id(), false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(sysvar::instructions::id(), false),
-            AccountMeta::new(cfg.token0_mint, false),
-            AccountMeta::new(cfg.token1_mint, false),
-            AccountMeta::new(cfg.add1, false),
-            AccountMeta::new_readonly(cfg.vote, false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, None, None));
+        accs.push(AccountMeta::new_readonly(Misc::create_humidifi_param(1500), false));
+        self.builder.add_remaining_accounts(&accs);
     }
 
     pub fn attach_zerofi_accs(&mut self, market: &Pubkey) {
         let cfg =
             self.cfg.zerofi.as_ref().and_then(|c| c.swap_v1.get(market)).unwrap_or_else(|| panic!("ZeroFi market {market} not configured"));
 
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_zerofi::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new(cfg.vault_info_base, false),
-            AccountMeta::new(cfg.vault_base, false),
-            AccountMeta::new(cfg.vault_info_quote, false),
-            AccountMeta::new(cfg.vault_quote, false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(sysvar::instructions::id(), false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_zerofi::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, None, None));
+        self.builder.add_remaining_accounts(&accs);
     }
 
     pub fn attach_obric_v2_accs(&mut self, market: &Pubkey) {
@@ -528,21 +515,9 @@ impl<'a> ConstructSwap<'a> {
             .and_then(|c| c.swap_v2.get(market))
             .unwrap_or_else(|| panic!("ObricV2 market {market} not configured"));
 
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_obric_v2::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new_readonly(cfg.second_ref_oracle, false),
-            AccountMeta::new_readonly(cfg.third_ref_oracle, false),
-            AccountMeta::new(cfg.reserve_x, false),
-            AccountMeta::new(cfg.reserve_y, false),
-            AccountMeta::new(cfg.ref_oracle, false),
-            AccountMeta::new_readonly(cfg.x_price_feed, false),
-            AccountMeta::new_readonly(cfg.y_price_feed, false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_obric_v2::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, None, None));
+        self.builder.add_remaining_accounts(&accs);
     }
 
     pub fn attach_tessera_accs(&mut self, market: &Pubkey) {
@@ -553,42 +528,19 @@ impl<'a> ConstructSwap<'a> {
             .and_then(|c| c.swap_v1.get(market))
             .unwrap_or_else(|| panic!("Tessera market {market} not configured"));
 
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_tessera::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new_readonly(cfg.global_state, false),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new(cfg.base_ta, false),
-            AccountMeta::new(cfg.quote_ta, false),
-            AccountMeta::new_readonly(self.src_mint, false),
-            AccountMeta::new_readonly(self.dst_mint, false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(sysvar::instructions::id(), false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_tessera::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, Some(self.src_mint), Some(self.dst_mint)));
+        self.builder.add_remaining_accounts(&accs);
     }
 
     pub fn attach_goonfi_accs(&mut self, market: &Pubkey) {
         let cfg =
             self.cfg.goonfi.as_ref().and_then(|c| c.swap_v1.get(market)).unwrap_or_else(|| panic!("GoonFi market {market} not configured"));
 
-        let goonfi_param = Pubkey::new_from_array([0u8; 32]);
-
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_goonfi::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new_readonly(goonfi_param, false),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new(cfg.base_ta, false),
-            AccountMeta::new(cfg.quote_ta, false),
-            AccountMeta::new_readonly(cfg.blacklist, false),
-            AccountMeta::new_readonly(sysvar::instructions::id(), false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_goonfi::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, None, None));
+        accs.push(AccountMeta::new_readonly(Pubkey::new_from_array([0u8; 32]), false));
+        self.builder.add_remaining_accounts(&accs);
     }
 
     pub fn attach_bisonfi_accs(&mut self, market: &Pubkey) {
@@ -599,18 +551,9 @@ impl<'a> ConstructSwap<'a> {
             .and_then(|c| c.swap_v1.get(market))
             .unwrap_or_else(|| panic!("BisonFi market {market} not configured"));
 
-        self.builder.add_remaining_accounts(&[
-            AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_bisonfi::id().to_bytes()), false),
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new(cfg.market, false),
-            AccountMeta::new(cfg.market_base_ta, false),
-            AccountMeta::new(cfg.market_quote_ta, false),
-            AccountMeta::new(self.src_ta, false),
-            AccountMeta::new(self.dst_ta, false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(spl_token::id(), false),
-            AccountMeta::new_readonly(sysvar::instructions::id(), false),
-        ]);
+        let mut accs = vec![AccountMeta::new_readonly(Pubkey::new_from_array(magnus_shared::pmm_bisonfi::id().to_bytes()), false)];
+        accs.extend(cfg.swap_accounts(self.payer, self.src_ta, self.dst_ta, None, None));
+        self.builder.add_remaining_accounts(&accs);
     }
 }
 
@@ -716,7 +659,8 @@ impl App {
             Cmd::FetchAccounts { .. } => self.fetch_accounts(),
             Cmd::FetchPrograms { .. } => self.fetch_programs(),
             Cmd::Benchmark { .. } => self.benchmark(),
-            Cmd::Single { .. } | Cmd::Multi { .. } => self.simulate(),
+            Cmd::RouterSingle { .. } | Cmd::RouterMulti { .. } => self.simulate(),
+            Cmd::Direct { .. } => self.direct(),
         }
     }
 
@@ -765,7 +709,7 @@ impl App {
     }
 
     pub fn benchmark(&self) -> eyre::Result<()> {
-        let Cmd::Benchmark { common, datasets_path, pmms, range, spoof } = &self.args.cmd else { unreachable!() };
+        let Cmd::Benchmark { common, datasets_path, pmms, range, spoof, call_type } = &self.args.cmd else { unreachable!() };
 
         let rpc_client = RpcClient::new(common.http_url.expose_secret().to_string());
 
@@ -795,26 +739,27 @@ impl App {
                 .iter()
                 .zip(pmms.iter())
                 .map(|(&(pmm, market), target)| {
-                    let (cfg, multi, mints) = (&self.cfg, &multi, &mints);
+                    let (app, cfg, multi, mints) = (&self, &self.cfg, &multi, &mints);
                     let rpc_client = &rpc_client;
                     let pmm_accs = accs_map.get(&pmm).cloned().unwrap_or_default();
                     let benchmark = benchmark.clone();
                     let market_str = market.to_string();
 
                     s.spawn(move || -> eyre::Result<()> {
+                        let spoof_for_programs = if matches!(call_type, CallType::Direct) { None } else { *spoof };
+
                         // start up the progress bar only when all the spawned threads
                         // have finished bootstrapping so there's no CLI progress bar race cond
-                        let (mut env, src_ata, dst_ata) = multi.suspend(|| -> eyre::Result<_> {
-                            let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(mints), cfg.clone(), slot)?;
-                            env.get_and_load_programs(&[pmm], common.jit_programs, *spoof, Some(rpc_client))?.setup_wallet(
-                                &src_token.addr,
-                                benchmark.range_end(),
-                                consts::AIRDROP_AMOUNT,
-                            )?;
+                        let (mut env, src_ata, dst_ata) =
+                            multi.suspend(|| -> eyre::Result<_> {
+                                let mut env =
+                                    Environment::new(&common.programs_path, &common.accounts_path, Some(mints), cfg.clone(), slot)?;
+                                env.get_and_load_programs(&[pmm], common.jit_programs, spoof_for_programs, Some(rpc_client))?
+                                    .setup_wallet(&src_token.addr, benchmark.range_end(), consts::AIRDROP_AMOUNT)?;
 
-                            let (src_ata, dst_ata) = (env.wallet_ata(&src_token.addr), env.wallet_ata(&dst_token.addr));
-                            Ok((env, src_ata, dst_ata))
-                        })?;
+                                let (src_ata, dst_ata) = (env.wallet_ata(&src_token.addr), env.wallet_ata(&dst_token.addr));
+                                Ok((env, src_ata, dst_ata))
+                            })?;
 
                         let pb = multi.add(ProgressBar::new(benchmark.range_count()));
                         pb.set_style(
@@ -830,38 +775,47 @@ impl App {
                             env.reset_wallet(&src_token.addr, amount_in)?;
                             env.set_accounts(&pmm_accs)?;
 
-                            let mut swap_builder = SwapBuilder::new()
-                                .payer(env.wallet_pubkey())
-                                .source_token_account(src_ata)
-                                .destination_token_account(dst_ata)
-                                .source_mint(src_token.addr)
-                                .destination_mint(dst_token.addr)
-                                .amount_in(amount_in)
-                                .expect_amount_out(1)
-                                .min_return(1)
-                                .amounts(vec![amount_in])
-                                .routes(routes.clone())
-                                .order_id(Misc::gen_order_id())
-                                .clone();
+                            let ix = match call_type {
+                                CallType::Cpi => {
+                                    let mut swap_builder = SwapBuilder::new()
+                                        .payer(env.wallet_pubkey())
+                                        .source_token_account(src_ata)
+                                        .destination_token_account(dst_ata)
+                                        .source_mint(src_token.addr)
+                                        .destination_mint(dst_token.addr)
+                                        .amount_in(amount_in)
+                                        .expect_amount_out(1)
+                                        .min_return(1)
+                                        .amounts(vec![amount_in])
+                                        .routes(routes.clone())
+                                        .order_id(Misc::gen_order_id())
+                                        .clone();
 
-                            let mut swap_ix = ConstructSwap {
-                                cfg: cfg.clone(),
-                                builder: &mut swap_builder,
-                                payer: env.wallet_pubkey(),
-                                src_ta: src_ata,
-                                dst_ta: dst_ata,
-                                src_mint: src_token.addr,
-                                dst_mint: dst_token.addr,
-                            }
-                            .attach_pmms_accs(&[(pmm, market)])
-                            .instruction();
+                                    let mut swap_ix = ConstructSwap {
+                                        cfg: cfg.clone(),
+                                        builder: &mut swap_builder,
+                                        payer: env.wallet_pubkey(),
+                                        src_ta: src_ata,
+                                        dst_ta: dst_ata,
+                                        src_mint: src_token.addr,
+                                        dst_mint: dst_token.addr,
+                                    }
+                                    .attach_pmms_accs(&[(pmm, market)])
+                                    .instruction();
 
-                            if let Some(aggr) = spoof {
-                                swap_ix.program_id = aggr.program_id();
-                            }
+                                    if let Some(aggr) = spoof {
+                                        swap_ix.program_id = aggr.program_id();
+                                    }
+
+                                    swap_ix
+                                }
+                                CallType::Direct => {
+                                    app.build_direct_ix(&env, target, market, src_token, dst_token, src_ata, dst_ata, amount_in)
+                                }
+                            };
 
                             let tx = Transaction::new_signed_with_payer(
-                                &[swap_ix],
+                                &[ix],
                                 Some(&env.wallet_pubkey()),
                                 &[&env.wallet],
                                 env.latest_blockhash(),
@@ -877,7 +831,10 @@ impl App {
                                 }
                             };
 
-                            let amount_out = env.get_amount_out(&res);
+                            let amount_out = match call_type {
+                                CallType::Cpi => env.get_amount_out(&res),
+                                CallType::Direct => env.token_balance(&dst_token.addr),
+                            };
 
                             records.push(BenchmarkRecord {
                                 slot: env.slot.unwrap_or_default(),
@@ -898,10 +855,15 @@ impl App {
 
                         (warn_cnt != 0).then(|| pb.println(format!("[WARN] {}: {} total failures", pmm, warn_cnt)));
 
+                        let via = match call_type {
+                            CallType::Cpi => spoof.map(|a| a.to_string()).unwrap_or_else(|| "magnus".to_string()),
+                            CallType::Direct => "direct".to_string(),
+                        };
                         let filename = format!(
-                            "{}/{}_{}_{}_{}.parquet",
+                            "{}/{}_{}_{}_{}_{}",
                             datasets_path,
                             env.slot.unwrap_or_default(),
+                            via,
                             pmm,
                             market_str,
                             benchmark.time()
@@ -927,12 +889,12 @@ impl App {
 
     pub fn simulate(&self) -> eyre::Result<()> {
         let (common, amount_in, resolved, weights, spoof) = match &self.args.cmd {
-            Cmd::Single { common, amount_in, pmms, weights, spoof } => {
+            Cmd::RouterSingle { common, amount_in, pmms, weights, spoof } => {
                 let resolved: Vec<Vec<(Dex, Pubkey)>> =
                     vec![pmms.iter().map(|t| (t.dex, t.resolve(&self.cfg).unwrap_or_else(|| panic!("{} not configured", t)))).collect()];
                 (common, vec![*amount_in], resolved, vec![weights.clone()], spoof)
             }
-            Cmd::Multi { common, amount_in, pmms, weights, spoof } => {
+            Cmd::RouterMulti { common, amount_in, pmms, weights, spoof } => {
                 let targets = CliArgs::parse_nested_pmms(pmms).expect("invalid format for nested dexes");
                 let weights = CliArgs::parse_nested_weights(weights).expect("invalid format for nested weights");
 
@@ -1018,7 +980,7 @@ impl App {
         let res = env.send_transaction(tx).expect("failed to exec tx");
         let amount_out = env.get_amount_out(&res);
 
-        env.get_swap_events(&res).iter().for_each(|event| {
+        env.get_router_swap_events(&res).iter().for_each(|event| {
             info!(?event);
         });
         info!(
@@ -1028,6 +990,287 @@ impl App {
             amount_in = ?Misc::to_human(amount_in_sum, src_token.dec),
             amount_out = ?Misc::to_human(amount_out, dst_token.dec),
             cu = res.compute_units_consumed
+        );
+
+        Ok(())
+    }
+
+    fn build_direct_ix<P: Into<String> + std::fmt::Display + Clone + std::fmt::Debug>(
+        &self,
+        env: &Environment<P>,
+        pmm: &PMMTarget,
+        market: Pubkey,
+        src_token: &cfg::Token,
+        dst_token: &cfg::Token,
+        src_ata: Pubkey,
+        dst_ata: Pubkey,
+        amount_in: u64,
+    ) -> Instruction {
+        match pmm.dex {
+            Dex::SolfiV2 => {
+                let cfg = self
+                    .cfg
+                    .solfi_v2
+                    .as_ref()
+                    .and_then(|c| c.swap_v1.get(&market))
+                    .unwrap_or_else(|| panic!("SolFiV2 market {market} not configured"));
+
+                let (direction, user_base_ta, user_quote_ta) = if src_token.addr == cfg.base_mint && dst_token.addr == cfg.quote_mint {
+                    (0u8, src_ata, dst_ata)
+                } else if src_token.addr == cfg.quote_mint && dst_token.addr == cfg.base_mint {
+                    (1u8, dst_ata, src_ata)
+                } else {
+                    panic!("src/dst token mints don't match solfi-v2 market base/quote mints");
+                };
+
+                let mut data = Vec::with_capacity(18);
+                data.extend_from_slice(magnus_shared::pmm_solfi_v2::SWAP_SELECTOR);
+                data.extend_from_slice(&amount_in.to_le_bytes());
+                data.extend_from_slice(&1u64.to_le_bytes());
+                data.push(direction);
+
+                Instruction {
+                    program_id: Pubkey::new_from_array(magnus_shared::pmm_solfi_v2::id().to_bytes()),
+                    accounts: cfg.swap_accounts(env.wallet_pubkey(), user_base_ta, user_quote_ta, None, None),
+                    data,
+                }
+            }
+            Dex::Tessera => {
+                let cfg = self
+                    .cfg
+                    .tessera
+                    .as_ref()
+                    .and_then(|c| c.swap_v1.get(&market))
+                    .unwrap_or_else(|| panic!("Tessera market {market} not configured"));
+
+                let base_mint = env.token_account_mint(&cfg.base_ta);
+                let quote_mint = env.token_account_mint(&cfg.quote_ta);
+
+                // side: 1 = base→quote (sell), 0 = quote→base (buy)
+                let (side, user_base_ta, user_quote_ta) = if src_token.addr == base_mint && dst_token.addr == quote_mint {
+                    (1u8, src_ata, dst_ata)
+                } else if src_token.addr == quote_mint && dst_token.addr == base_mint {
+                    (0u8, dst_ata, src_ata)
+                } else {
+                    panic!("src/dst token mints don't match tessera market base/quote mints");
+                };
+
+                let mut data = Vec::with_capacity(18);
+                data.extend_from_slice(magnus_shared::pmm_tessera::SWAP_SELECTOR);
+                data.extend_from_slice(&side.to_le_bytes());
+                data.extend_from_slice(&amount_in.to_le_bytes());
+                data.extend_from_slice(&1u64.to_le_bytes()); // min_amount_out
+
+                Instruction {
+                    program_id: Pubkey::new_from_array(magnus_shared::pmm_tessera::id().to_bytes()),
+                    accounts: cfg.swap_accounts(env.wallet_pubkey(), user_base_ta, user_quote_ta, Some(base_mint), Some(quote_mint)),
+                    data,
+                }
+            }
+            Dex::BisonFi => {
+                let cfg = self
+                    .cfg
+                    .bisonfi
+                    .as_ref()
+                    .and_then(|c| c.swap_v1.get(&market))
+                    .unwrap_or_else(|| panic!("BisonFi market {market} not configured"));
+
+                let base_mint = env.token_account_mint(&cfg.market_base_ta);
+
+                let (b_to_a, user_base_ta, user_quote_ta) = if src_token.addr == base_mint {
+                    (false, src_ata, dst_ata)
+                } else {
+                    (true, dst_ata, src_ata)
+                };
+
+                let mut data = Vec::with_capacity(18);
+                data.extend_from_slice(magnus_shared::pmm_bisonfi::SWAP_SELECTOR);
+                data.extend_from_slice(&amount_in.to_le_bytes());
+                data.extend_from_slice(&0u64.to_le_bytes()); // amount_out_min
+                data.push(b_to_a as u8);
+
+                Instruction {
+                    program_id: Pubkey::new_from_array(magnus_shared::pmm_bisonfi::id().to_bytes()),
+                    accounts: cfg.swap_accounts(env.wallet_pubkey(), user_base_ta, user_quote_ta, None, None),
+                    data,
+                }
+            }
+            Dex::HumidiFi | Dex::HumidiFiSwapV2 | Dex::HumidiFiSwapV3 => {
+                let humidifi = self.cfg.humidifi.as_ref().unwrap_or_else(|| panic!("HumidiFi not configured"));
+
+                let selector: &[u8];
+                let cfg_base_ta: Pubkey;
+                let accounts = match pmm.dex {
+                    Dex::HumidiFi => {
+                        selector = magnus_shared::pmm_humidifi::SWAP_SELECTOR;
+                        let c = humidifi.swap_v1.get(&market).unwrap_or_else(|| panic!("HumidiFi v1 market {market} not configured"));
+                        cfg_base_ta = c.base_ta;
+                        let base_mint = env.token_account_mint(&c.base_ta);
+                        let (ba, qa) = if src_token.addr == base_mint { (src_ata, dst_ata) } else { (dst_ata, src_ata) };
+                        c.swap_accounts(env.wallet_pubkey(), ba, qa, None, None)
+                    }
+                    Dex::HumidiFiSwapV2 => {
+                        selector = magnus_shared::pmm_humidifi::SWAPV2_SELECTOR;
+                        let c = humidifi.swap_v2.get(&market).unwrap_or_else(|| panic!("HumidiFi v2 market {market} not configured"));
+                        cfg_base_ta = c.base_ta;
+                        let base_mint = env.token_account_mint(&c.base_ta);
+                        let (ba, qa) = if src_token.addr == base_mint { (src_ata, dst_ata) } else { (dst_ata, src_ata) };
+                        c.swap_accounts(env.wallet_pubkey(), ba, qa, None, None)
+                    }
+                    Dex::HumidiFiSwapV3 => {
+                        selector = magnus_shared::pmm_humidifi::SWAPV3_SELECTOR;
+                        let c = humidifi.swap_v3.get(&market).unwrap_or_else(|| panic!("HumidiFi v3 market {market} not configured"));
+                        cfg_base_ta = c.base_ta;
+                        let base_mint = env.token_account_mint(&c.base_ta);
+                        let (ba, qa) = if src_token.addr == base_mint { (src_ata, dst_ata) } else { (dst_ata, src_ata) };
+                        c.swap_accounts(env.wallet_pubkey(), ba, qa, None, None)
+                    }
+                    _ => unreachable!(),
+                };
+
+                let base_mint = env.token_account_mint(&cfg_base_ta);
+                let is_base_to_quote: u8 = if src_token.addr == base_mint { 0 } else { 1 };
+
+                let swap_id: u64 = 1500;
+                let mut data: Vec<u8> = Vec::with_capacity(25);
+                data.extend_from_slice(&swap_id.to_le_bytes());
+                data.extend_from_slice(&amount_in.to_le_bytes());
+                data.push(is_base_to_quote);
+                data.extend_from_slice(&[0u8; 7]); // padding
+                data.extend_from_slice(selector);
+
+                // obfuscate instruction data
+                let key: u64 = u64::from_le_bytes([58, 255, 47, 255, 226, 186, 235, 195]);
+                for (i, chunk) in data.chunks_exact_mut(8).enumerate() {
+                    let qword = u64::from_le_bytes(chunk.try_into().unwrap());
+                    let pos_mask = (0x0001_0001_0001_0001u64).wrapping_mul(i as u64);
+                    let obfuscated = qword ^ key ^ pos_mask;
+                    chunk.copy_from_slice(&obfuscated.to_le_bytes());
+                }
+                // handle remainder (last byte = selector)
+                let remainder_start = data.len() / 8 * 8;
+                if remainder_start < data.len() {
+                    let pos_mask = (0x0001_0001_0001_0001u64).wrapping_mul((remainder_start / 8) as u64);
+                    let mut rem = [0u8; 8];
+                    let rem_len = data.len() - remainder_start;
+                    rem[..rem_len].copy_from_slice(&data[remainder_start..]);
+                    let qword = u64::from_le_bytes(rem);
+                    let obfuscated = qword ^ key ^ pos_mask;
+                    let ob_bytes = obfuscated.to_le_bytes();
+                    data[remainder_start..].copy_from_slice(&ob_bytes[..rem_len]);
+                }
+
+                Instruction { program_id: Pubkey::new_from_array(magnus_shared::pmm_humidifi::id().to_bytes()), accounts, data }
+            }
+            Dex::GoonFi => {
+                let cfg = self
+                    .cfg
+                    .goonfi
+                    .as_ref()
+                    .and_then(|c| c.swap_v1.get(&market))
+                    .unwrap_or_else(|| panic!("GoonFi market {market} not configured"));
+
+                let quote_mint = env.token_account_mint(&cfg.quote_ta);
+
+                // is_bid: true when buying base with quote
+                let (is_bid, base_account, quote_account) = if src_token.addr == quote_mint {
+                    (true, dst_ata, src_ata)
+                } else {
+                    (false, src_ata, dst_ata)
+                };
+
+                // blacklist_bump is 0 (goonfi_param is all zeros)
+                let swap_params_data = [
+                    is_bid as u8,
+                    0u8, // bump
+                ];
+
+                let mut data = Vec::with_capacity(19);
+                data.extend_from_slice(magnus_shared::pmm_goonfi::SWAP_SELECTOR);
+                data.extend_from_slice(&swap_params_data);
+                data.extend_from_slice(&amount_in.to_le_bytes());
+                data.extend_from_slice(&1u64.to_le_bytes()); // minimum_amount_out
+
+                Instruction {
+                    program_id: Pubkey::new_from_array(magnus_shared::pmm_goonfi::id().to_bytes()),
+                    accounts: cfg.swap_accounts(env.wallet_pubkey(), base_account, quote_account, None, None),
+                    data,
+                }
+            }
+            Dex::ObricV2 => {
+                let cfg = self
+                    .cfg
+                    .obric_v2
+                    .as_ref()
+                    .and_then(|c| c.swap_v2.get(&market))
+                    .unwrap_or_else(|| panic!("ObricV2 market {market} not configured"));
+
+                let x_mint = env.token_account_mint(&cfg.reserve_x);
+                let y_mint = env.token_account_mint(&cfg.reserve_y);
+
+                let (x_to_y, user_token_x, user_token_y) = if src_token.addr == x_mint && dst_token.addr == y_mint {
+                    (true, src_ata, dst_ata)
+                } else if src_token.addr == y_mint && dst_token.addr == x_mint {
+                    (false, dst_ata, src_ata)
+                } else {
+                    panic!("src/dst token mints don't match obric-v2 market x/y mints");
+                };
+
+                let mut data = Vec::with_capacity(18);
+                data.extend_from_slice(magnus_shared::pmm_obric_v2::SWAP2_SELECTOR);
+                data.push(x_to_y as u8);
+                data.extend_from_slice(&amount_in.to_le_bytes());
+                data.extend_from_slice(&1u64.to_le_bytes()); // min_out
+
+                Instruction {
+                    program_id: Pubkey::new_from_array(magnus_shared::pmm_obric_v2::id().to_bytes()),
+                    accounts: cfg.swap_accounts(env.wallet_pubkey(), user_token_x, user_token_y, None, None),
+                    data,
+                }
+            }
+            _ => unimplemented!("direct swap not yet implemented for {:?}", pmm.dex),
+        }
+    }
+
+    pub fn direct(&self) -> eyre::Result<()> {
+        let Cmd::Direct { common, pmm, amount_in } = &self.args.cmd else { unreachable!() };
+
+        let market = pmm.resolve(&self.cfg).unwrap_or_else(|| panic!("{} not configured", pmm));
+        let rpc_client = RpcClient::new(common.http_url.expose_secret().to_string());
+
+        let (src_token, dst_token) = (self.cfg.get_token(&common.src_token)?, self.cfg.get_token(&common.dst_token)?);
+        let mints = vec![(src_token.addr, src_token.dec), (dst_token.addr, dst_token.dec)];
+        let amount_in = Misc::to_raw(*amount_in, src_token.dec);
+
+        let mut env = Environment::new(&common.programs_path, &common.accounts_path, Some(&mints), self.cfg.clone(), None)?;
+        env.get_and_load_programs(&[pmm.dex], common.jit_programs, None, Some(&rpc_client))?
+            .get_and_load_accounts(&[pmm.dex], common.jit_accounts, Some(&rpc_client))?
+            .setup_wallet(&src_token.addr, amount_in, consts::AIRDROP_AMOUNT)?;
+        info!(?env);
+
+        let (src_ata, dst_ata) = (env.wallet_ata(&src_token.addr), env.wallet_ata(&dst_token.addr));
+        let (src_before, dst_before) = (env.token_balance(&src_token.addr), env.token_balance(&dst_token.addr));
+
+        let ix = self.build_direct_ix(&env, pmm, market, src_token, dst_token, src_ata, dst_ata, amount_in);
+        let tx = Transaction::new_signed_with_payer(&[ix], Some(&env.wallet_pubkey()), &[&env.wallet], env.latest_blockhash());
+        let res = env.send_transaction(tx).expect("failed to exec tx");
+
+        let (src_after, dst_after) = (env.token_balance(&src_token.addr), env.token_balance(&dst_token.addr));
+
+        let swap_events = env.get_router_swap_events(&res);
+        swap_events.iter().for_each(|event| {
+            info!(?event);
+        });
+
+        info!(
+            pmm = %pmm,
+            market = %market,
+            src_token = %src_token.symbol,
+            dst_token = %dst_token.symbol,
+            amount_in = ?Misc::to_human(amount_in, src_token.dec),
+            src_balance = ?format!("{:.6} -> {:.6}", Misc::to_human(src_before, src_token.dec), Misc::to_human(src_after, src_token.dec)),
+            dst_balance = ?format!("{:.6} -> {:.6}", Misc::to_human(dst_before, dst_token.dec), Misc::to_human(dst_after, dst_token.dec)),
+            cu = res.compute_units_consumed,
         );
 
         Ok(())
