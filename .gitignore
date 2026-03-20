@@ -4,5 +4,4 @@ sbf_trace_dir/
 *.parquet
 *.json
 venv/
-*.png
-*.jpg
+
